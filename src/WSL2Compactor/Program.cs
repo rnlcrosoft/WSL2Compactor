@@ -125,7 +125,7 @@ static class Program
     private static void PrintHeader()
     {
         AnsiConsole.Write(new FigletText("WSL2Compactor").LeftJustified().Color(Color.Teal));
-        AnsiConsole.MarkupLine("[grey]Interactive CLI for compacting WSL2 ext4.vhdx files.[/]");
+        AnsiConsole.MarkupLine("[grey]Interactive app for compacting WSL2 ext4.vhdx files.[/]");
         AnsiConsole.WriteLine();
     }
 

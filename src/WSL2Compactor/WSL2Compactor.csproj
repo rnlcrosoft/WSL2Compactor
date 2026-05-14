@@ -11,7 +11,7 @@
     <RootNamespace>WSL2Compactor</RootNamespace>
     <Version>0.1.0</Version>
     <Authors>WSL2Compactor contributors</Authors>
-    <Description>Interactive CLI for compacting WSL2 ext4.vhdx files.</Description>
+    <Description>Interactive app for compacting WSL2 ext4.vhdx files.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
 

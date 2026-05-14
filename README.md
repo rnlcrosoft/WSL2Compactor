@@ -1,6 +1,6 @@
 # WSL2Compactor
 
-WSL2Compactor is an interactive Windows terminal app for compacting WSL2 `ext4.vhdx` files.
+WSL2Compactor is an interactive Windows app for compacting WSL2 `ext4.vhdx` files.
 
 It automates the Windows-side compaction flow for WSL2 distributions.
 
@@ -51,7 +51,7 @@ dotnet publish src/WSL2Compactor/WSL2Compactor.csproj \
   --self-contained true \
   -p:PublishSingleFile=true \
   -p:EnableCompressionInSingleFile=true \
-  -p:PublishTrimmed=false \
+  -p:PublishTrimmed=true \
   -p:PublishReadyToRun=false
 ```
 
