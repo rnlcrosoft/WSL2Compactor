@@ -10,10 +10,10 @@ Deleted files inside WSL do not automatically shrink ext4.vhdx.
 +----------------------------------+-------------------------+-----------------+
 | State                            | Windows C: free / total | VHDX disk usage |
 +----------------------------------+-------------------------+-----------------+
-| Initial state                    | 500 GB / 1000 GB        | 500 GiB         |
-| [WSL] Create 100 GiB test data   | 400 GB / 1000 GB        | 600 GiB         |
-| [WSL] Delete that test data      | 400 GB / 1000 GB        | 600 GiB         |
-| [WSL2Compactor] Compact VHDX     | 500 GB / 1000 GB        | 500 GiB         |
+| Initial state                    | 500 GiB / 1000 GiB      | 500 GiB         |
+| [WSL] Create 100 GiB test data   | 400 GiB / 1000 GiB      | 600 GiB         |
+| [WSL] Delete that test data      | 400 GiB / 1000 GiB      | 600 GiB         |
+| [WSL2Compactor] Compact VHDX     | 500 GiB / 1000 GiB      | 500 GiB         |
 +----------------------------------+-------------------------+-----------------+
 
 Result: 100 GiB of deleted WSL data returned to Windows.
