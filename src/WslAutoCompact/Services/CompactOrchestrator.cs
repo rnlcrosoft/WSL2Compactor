@@ -38,7 +38,7 @@ internal sealed class CompactOrchestrator
         foreach (var row in rows)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            row.Status = "fstrim 実行中";
+            row.Status = "Running fstrim";
             log.Report("");
             log.Report($"== {row.Name}: fstrim ==");
 
@@ -50,7 +50,7 @@ internal sealed class CompactOrchestrator
 
             if (!trimResult.Succeeded)
             {
-                log.Report($"警告: {row.Name} の fstrim は失敗しました。compact は続行します。");
+                log.Report($"Warning: fstrim failed for {row.Name}. Compact will continue.");
             }
         }
 
@@ -59,7 +59,7 @@ internal sealed class CompactOrchestrator
         log.Report("== WSL shutdown ==");
         foreach (var row in rows)
         {
-            row.Status = "WSL 停止中";
+            row.Status = "Stopping WSL";
         }
 
         var shutdownResult = await _processRunner.RunAsync("wsl.exe", ["--shutdown"], log, cancellationToken)
@@ -67,7 +67,7 @@ internal sealed class CompactOrchestrator
 
         if (!shutdownResult.Succeeded)
         {
-            log.Report("警告: wsl --shutdown が非ゼロ終了しました。VHDX のロック解除を確認します。");
+            log.Report("Warning: wsl --shutdown exited with a non-zero code. Checking whether VHDX locks were released.");
         }
 
         foreach (var row in rows)
@@ -75,7 +75,7 @@ internal sealed class CompactOrchestrator
             cancellationToken.ThrowIfCancellationRequested();
             await WaitForVhdUnlockAsync(row.VhdPath, log, cancellationToken).ConfigureAwait(true);
             row.BeforeBytes = new FileInfo(row.VhdPath).Length;
-            row.Status = "compact 実行中";
+            row.Status = "Running compact";
             row.Backend = backendMode == BackendMode.OptimizeVhd ? _optimizeVhdBackend.Name : _virtDiskBackend.Name;
 
             log.Report("");
@@ -96,14 +96,14 @@ internal sealed class CompactOrchestrator
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                log.Report($"警告: {row.Backend} が失敗しました: {ex.Message}");
-                log.Report("DiskPart fallback を実行します。");
+                log.Report($"Warning: {row.Backend} failed: {ex.Message}");
+                log.Report("Running DiskPart fallback.");
                 row.Backend = _diskPartBackend.Name;
                 await _diskPartBackend.CompactAsync(row.VhdPath, log, cancellationToken).ConfigureAwait(true);
             }
 
             row.AfterBytes = new FileInfo(row.VhdPath).Length;
-            row.Status = "完了";
+            row.Status = "Done";
             log.Report($"After: {SizeFormatter.Format(row.AfterBytes.Value)}");
             log.Report($"Saved: {row.SavedText}");
         }
@@ -127,12 +127,12 @@ internal sealed class CompactOrchestrator
             }
             catch (IOException ex) when (DateTimeOffset.UtcNow < deadline)
             {
-                log.Report($"VHDX lock check: 待機中 ({attempt}) {ex.Message}");
+                log.Report($"VHDX lock check: waiting ({attempt}) {ex.Message}");
                 await Task.Delay(1000, cancellationToken).ConfigureAwait(true);
             }
             catch (UnauthorizedAccessException ex) when (DateTimeOffset.UtcNow < deadline)
             {
-                log.Report($"VHDX lock check: 待機中 ({attempt}) {ex.Message}");
+                log.Report($"VHDX lock check: waiting ({attempt}) {ex.Message}");
                 await Task.Delay(1000, cancellationToken).ConfigureAwait(true);
             }
         }

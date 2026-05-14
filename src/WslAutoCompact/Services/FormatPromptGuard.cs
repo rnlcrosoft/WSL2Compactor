@@ -16,13 +16,13 @@ internal sealed class FormatPromptGuard : IDisposable
     {
         _log = log;
         _timer = new System.Threading.Timer(_ => ScanAndClosePrompts(), null, TimeSpan.Zero, TimeSpan.FromMilliseconds(500));
-        _log.Report("Format prompt guard: 有効");
+        _log.Report("Format prompt guard: enabled");
     }
 
     public void Dispose()
     {
         _timer.Dispose();
-        _log.Report("Format prompt guard: 停止");
+        _log.Report("Format prompt guard: stopped");
     }
 
     private void ScanAndClosePrompts()
@@ -52,7 +52,7 @@ internal sealed class FormatPromptGuard : IDisposable
                     }
 
                     _closedWindows.Add(window);
-                    _log.Report($"Format prompt guard: フォーマット確認ダイアログを閉じました ({title})");
+                    _log.Report($"Format prompt guard: closed a format prompt ({title})");
                     PostMessage(window, WmClose, IntPtr.Zero, IntPtr.Zero);
                     return true;
                 }, IntPtr.Zero);
@@ -60,7 +60,7 @@ internal sealed class FormatPromptGuard : IDisposable
         }
         catch (Exception ex)
         {
-            _log.Report($"Format prompt guard: 監視エラー {ex.Message}");
+            _log.Report($"Format prompt guard: monitoring error {ex.Message}");
         }
     }
 
@@ -77,12 +77,9 @@ internal sealed class FormatPromptGuard : IDisposable
 
     private static bool LooksLikeFormatPrompt(string text)
     {
-        var hasFormat = text.Contains("format", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("フォーマット", StringComparison.OrdinalIgnoreCase);
+        var hasFormat = text.Contains("format", StringComparison.OrdinalIgnoreCase);
         var hasDisk = text.Contains("disk", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("drive", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("ディスク", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("ドライブ", StringComparison.OrdinalIgnoreCase);
+            || text.Contains("drive", StringComparison.OrdinalIgnoreCase);
 
         return hasFormat && hasDisk;
     }

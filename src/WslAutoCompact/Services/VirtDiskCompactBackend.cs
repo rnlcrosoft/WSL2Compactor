@@ -33,22 +33,22 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
                 if (attachResult == 0)
                 {
                     attached = true;
-                    log.Report("virtdisk.dll: read-only attach 完了");
+                    log.Report("virtdisk.dll: read-only attach completed");
                 }
                 else
                 {
-                    log.Report($"virtdisk.dll: read-only attach をスキップします ({FormatWin32Error(attachResult)})");
+                    log.Report($"virtdisk.dll: skipping read-only attach ({FormatWin32Error(attachResult)})");
                 }
 
                 cancellationToken.ThrowIfCancellationRequested();
-                log.Report("virtdisk.dll: CompactVirtualDisk 実行中");
+                log.Report("virtdisk.dll: running CompactVirtualDisk");
                 var compactResult = CompactVirtualDisk(handle, CompactVirtualDiskFlag.None, IntPtr.Zero, IntPtr.Zero);
                 if (compactResult != 0)
                 {
                     throw new Win32Exception((int)compactResult, $"CompactVirtualDisk failed: {FormatWin32Error(compactResult)}");
                 }
 
-                log.Report("virtdisk.dll: CompactVirtualDisk 完了");
+                log.Report("virtdisk.dll: CompactVirtualDisk completed");
             }
             finally
             {
@@ -56,8 +56,8 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
                 {
                     var detachResult = DetachVirtualDisk(handle, DetachVirtualDiskFlag.None, 0);
                     log.Report(detachResult == 0
-                        ? "virtdisk.dll: detach 完了"
-                        : $"virtdisk.dll: detach 失敗 ({FormatWin32Error(detachResult)})");
+                        ? "virtdisk.dll: detach completed"
+                        : $"virtdisk.dll: detach failed ({FormatWin32Error(detachResult)})");
                 }
             }
         }, cancellationToken).ConfigureAwait(false);

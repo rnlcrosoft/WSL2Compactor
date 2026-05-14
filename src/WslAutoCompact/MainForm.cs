@@ -51,7 +51,7 @@ internal sealed class MainForm : Form
 
         if (!IsRunningAsAdministrator())
         {
-            Log("警告: 管理者権限で起動していません。publish 版 exe は UAC 昇格を要求します。");
+            Log("Warning: The app is not running as administrator. Published builds request UAC elevation automatically.");
         }
 
         await RefreshDistributionsAsync();
@@ -92,7 +92,7 @@ internal sealed class MainForm : Form
             AutoSize = false,
             Dock = DockStyle.Fill,
             Height = 48,
-            Text = "実行すると WSL / Docker Desktop / VS Code Remote など WSL を使うプロセスは停止します。フォーマット確認ダイアログは compact 中に自動で閉じるよう監視します。",
+            Text = "Running compact stops WSL and may interrupt Docker Desktop, VS Code Remote, and other WSL-based processes. Format prompts are monitored and closed during compact operations.",
             ForeColor = Color.FromArgb(130, 60, 0),
             Padding = new Padding(0, 6, 0, 6)
         };
@@ -109,11 +109,11 @@ internal sealed class MainForm : Form
             Padding = new Padding(0, 8, 0, 8)
         };
 
-        _refreshButton = BuildButton("更新", RefreshButtonClick);
-        _selectAllButton = BuildButton("すべて選択", SelectAllButtonClick);
-        _runButton = BuildButton("実行", RunButtonClick);
-        _cancelButton = BuildButton("キャンセル", CancelButtonClick);
-        _openLogButton = BuildButton("ログを開く", OpenLogButtonClick);
+        _refreshButton = BuildButton("Refresh", RefreshButtonClick);
+        _selectAllButton = BuildButton("Select All", SelectAllButtonClick);
+        _runButton = BuildButton("Run", RunButtonClick);
+        _cancelButton = BuildButton("Cancel", CancelButtonClick);
+        _openLogButton = BuildButton("Open Log", OpenLogButtonClick);
         _cancelButton.Enabled = false;
 
         _backendComboBox = new ComboBox
@@ -129,7 +129,7 @@ internal sealed class MainForm : Form
         {
             AutoSize = true,
             Margin = new Padding(12, 8, 0, 0),
-            Text = "検出待ち"
+            Text = "Waiting for scan"
         };
 
         toolbar.Controls.AddRange([
@@ -174,13 +174,13 @@ internal sealed class MainForm : Form
 
         grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "", DataPropertyName = nameof(DistributionRow.Selected), Width = 42 });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Distro", DataPropertyName = nameof(DistributionRow.Name), Width = 140, ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "状態", DataPropertyName = nameof(DistributionRow.State), Width = 90, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "State", DataPropertyName = nameof(DistributionRow.State), Width = 90, ReadOnly = true });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "VHDX", DataPropertyName = nameof(DistributionRow.VhdPath), AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "実行前", DataPropertyName = nameof(DistributionRow.BeforeText), Width = 100, ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "実行後", DataPropertyName = nameof(DistributionRow.AfterText), Width = 100, ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "削減", DataPropertyName = nameof(DistributionRow.SavedText), Width = 100, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Before", DataPropertyName = nameof(DistributionRow.BeforeText), Width = 100, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "After", DataPropertyName = nameof(DistributionRow.AfterText), Width = 100, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Saved", DataPropertyName = nameof(DistributionRow.SavedText), Width = 100, ReadOnly = true });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Backend", DataPropertyName = nameof(DistributionRow.Backend), Width = 100, ReadOnly = true });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "進行状況", DataPropertyName = nameof(DistributionRow.Status), Width = 130, ReadOnly = true });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Status", DataPropertyName = nameof(DistributionRow.Status), Width = 130, ReadOnly = true });
 
         return grid;
     }
@@ -212,7 +212,7 @@ internal sealed class MainForm : Form
             row.Selected = anyUnselected;
         }
 
-        _selectAllButton.Text = anyUnselected ? "選択解除" : "すべて選択";
+        _selectAllButton.Text = anyUnselected ? "Clear All" : "Select All";
     }
 
     private async void RunButtonClick(object? sender, EventArgs e)
@@ -221,13 +221,13 @@ internal sealed class MainForm : Form
         var selectedRows = _rows.Where(row => row.Selected).ToList();
         if (selectedRows.Count == 0)
         {
-            MessageBox.Show(this, "compact する distro を選択してください。", "WSL Auto Compact", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "Select at least one distro to compact.", "WSL Auto Compact", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
         var confirmation = MessageBox.Show(
             this,
-            "WSL を停止して選択した ext4.vhdx を compact します。Docker Desktop や VS Code Remote も停止する可能性があります。続行しますか？",
+            "This will stop WSL and compact the selected ext4.vhdx files. Docker Desktop and VS Code Remote may also be interrupted. Continue?",
             "WSL Auto Compact",
             MessageBoxButtons.OKCancel,
             MessageBoxIcon.Warning);
@@ -251,15 +251,15 @@ internal sealed class MainForm : Form
         }
         catch (OperationCanceledException)
         {
-            Log("キャンセルされました。");
-            foreach (var row in selectedRows.Where(row => row.Status != "完了"))
+            Log("Canceled.");
+            foreach (var row in selectedRows.Where(row => row.Status != "Done"))
             {
-                row.Status = "キャンセル";
+                row.Status = "Canceled";
             }
         }
         catch (Exception ex)
         {
-            Log($"エラー: {ex.Message}");
+            Log($"Error: {ex.Message}");
             MessageBox.Show(this, ex.Message, "WSL Auto Compact", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
@@ -280,7 +280,7 @@ internal sealed class MainForm : Form
     {
         if (string.IsNullOrWhiteSpace(_currentLogFile) || !File.Exists(_currentLogFile))
         {
-            MessageBox.Show(this, "ログファイルがまだありません。", "WSL Auto Compact", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, "No log file has been created yet.", "WSL Auto Compact", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
@@ -292,7 +292,7 @@ internal sealed class MainForm : Form
         SetBusy(true);
         try
         {
-            Log("WSL distro を検出しています...");
+            Log("Scanning WSL distros...");
             _rows.Clear();
 
             var distributions = await _distributionService.GetDistributionsAsync(CancellationToken.None);
@@ -302,14 +302,14 @@ internal sealed class MainForm : Form
             }
 
             _summaryLabel.Text = distributions.Count == 0
-                ? "WSL2 ext4.vhdx は見つかりませんでした"
-                : $"{distributions.Count} distro 検出";
-            _selectAllButton.Text = distributions.Count == 0 ? "すべて選択" : "選択解除";
+                ? "No WSL2 ext4.vhdx files found"
+                : $"{distributions.Count} distro(s) found";
+            _selectAllButton.Text = distributions.Count == 0 ? "Select All" : "Clear All";
             Log(_summaryLabel.Text);
         }
         catch (Exception ex)
         {
-            Log($"検出エラー: {ex.Message}");
+            Log($"Scan error: {ex.Message}");
             MessageBox.Show(this, ex.Message, "WSL Auto Compact", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
@@ -328,17 +328,17 @@ internal sealed class MainForm : Form
         if (hasOptimizeVhd && existingOptimizeOption is null)
         {
             _backendComboBox.Items.Add(new BackendOption("Optimize-VHD (available, fallback: DiskPart)", BackendMode.OptimizeVhd));
-            Log("Optimize-VHD: 利用可能");
+            Log("Optimize-VHD: available");
         }
         else if (!hasOptimizeVhd && existingOptimizeOption is not null)
         {
             _backendComboBox.Items.Remove(existingOptimizeOption);
             _backendComboBox.SelectedIndex = 0;
-            Log("Optimize-VHD: 利用不可");
+            Log("Optimize-VHD: unavailable");
         }
         else
         {
-            Log(hasOptimizeVhd ? "Optimize-VHD: 利用可能" : "Optimize-VHD: 利用不可");
+            Log(hasOptimizeVhd ? "Optimize-VHD: available" : "Optimize-VHD: unavailable");
         }
     }
 

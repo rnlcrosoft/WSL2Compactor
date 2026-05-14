@@ -9,7 +9,7 @@ internal sealed class DistributionRow : INotifyPropertyChanged
     private long _beforeBytes;
     private long? _afterBytes;
     private string _backend = "";
-    private string _status = "待機中";
+    private string _status = "Pending";
 
     public DistributionRow(WslDistribution distribution)
     {

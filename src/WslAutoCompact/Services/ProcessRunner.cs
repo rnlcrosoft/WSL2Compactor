@@ -73,7 +73,7 @@ internal sealed class ProcessRunner
 
         if (process.ExitCode != 0)
         {
-            log?.Report($"終了コード: {process.ExitCode}");
+            log?.Report($"Exit code: {process.ExitCode}");
         }
 
         return new ProcessResult(process.ExitCode, stdout.ToString(), stderr.ToString());
