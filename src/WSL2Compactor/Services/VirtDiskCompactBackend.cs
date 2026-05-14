@@ -106,9 +106,11 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
                 if (virtualDiskProgress.OperationStatus == ErrorIoPending)
                 {
                     var calculatedPercent = CalculatePercent(virtualDiskProgress);
-                    var displayPercent = Math.Min(calculatedPercent, 99);
-                    maxPercent = Math.Max(maxPercent, displayPercent);
-                    var message = calculatedPercent >= 100 ? "Finalizing" : "CompactVirtualDisk running";
+                    maxPercent = Math.Max(maxPercent, calculatedPercent);
+                    var message = calculatedPercent >= 100
+                        ? "Completing VirtDisk operation"
+                        : "CompactVirtualDisk running";
+
                     progress.Report(CompactProgressUpdate.Progress(
                         "VirtDisk",
                         message,
@@ -119,7 +121,8 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
                         completionValue: virtualDiskProgress.CompletionValue,
                         operationStatus: virtualDiskProgress.OperationStatus,
                         calculatedPercent: calculatedPercent));
-                    await Task.Delay(500, cancellationToken).ConfigureAwait(false);
+
+                    await Task.Delay(1000, cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
@@ -191,10 +194,10 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
     {
         if (progress.CompletionValue == 0)
         {
-            return 5;
+            return 0;
         }
 
-        return Math.Clamp(progress.CurrentValue / (double)progress.CompletionValue * 100, 5, 100);
+        return Math.Clamp(progress.CurrentValue / (double)progress.CompletionValue * 100, 0, 100);
     }
 
     [DllImport("virtdisk.dll", CharSet = CharSet.Unicode)]

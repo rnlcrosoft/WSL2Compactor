@@ -21,6 +21,7 @@ static class Program
         var logFile = Path.Combine(logDirectory, $"wsl2compactor-{DateTime.Now:yyyyMMdd-HHmmss}.log");
 
         var log = new RunLogger(logFile);
+        using var consoleModeGuard = new ConsoleModeGuard(log);
         using var exitGuard = new ExitGuard(log);
         var processRunner = new ProcessRunner();
         var distributionService = new WslDistributionService(processRunner);

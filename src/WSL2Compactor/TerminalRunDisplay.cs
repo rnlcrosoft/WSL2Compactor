@@ -150,7 +150,9 @@ internal sealed class TerminalRunDisplay : IProgress<CompactProgressUpdate>
 
     private Panel BuildTranscriptPanel()
     {
-        var events = _log.SnapshotEvents(22).Select(RenderEvent).ToList<IRenderable>();
+        var events = SelectTranscriptEvents(_log.SnapshotEvents(200), maxCount: 22)
+            .Select(RenderEvent)
+            .ToList<IRenderable>();
         if (events.Count == 0)
         {
             events.Add(new Markup("[grey]No events yet.[/]"));
@@ -202,7 +204,7 @@ internal sealed class TerminalRunDisplay : IProgress<CompactProgressUpdate>
             return $"{SpinnerFrames[spinnerIndex % SpinnerFrames.Length]} running";
         }
 
-        var displayPercent = current.IsComplete ? 100 : Math.Min(percent, 99);
+        var displayPercent = Math.Clamp(percent, 0, 100);
         var width = 34;
         var filled = (int)Math.Round(width * displayPercent / 100, MidpointRounding.AwayFromZero);
         filled = Math.Clamp(filled, 0, width);
@@ -216,9 +218,9 @@ internal sealed class TerminalRunDisplay : IProgress<CompactProgressUpdate>
             return "-";
         }
 
-        if (!current.IsComplete && percent >= 99)
+        if (!current.IsComplete && percent >= 100)
         {
-            return "finalizing";
+            return "waiting for completion";
         }
 
         if (current.IsComplete || percent >= 100)
@@ -233,6 +235,33 @@ internal sealed class TerminalRunDisplay : IProgress<CompactProgressUpdate>
         }
 
         return FormatDuration(TimeSpan.FromSeconds(seconds));
+    }
+
+    private static IReadOnlyList<RunEvent> SelectTranscriptEvents(IReadOnlyList<RunEvent> events, int maxCount)
+    {
+        var selected = new List<RunEvent>();
+        string? previousKey = null;
+
+        foreach (var runEvent in events)
+        {
+            var key = GetTranscriptKey(runEvent);
+            if (string.Equals(previousKey, key, StringComparison.Ordinal))
+            {
+                selected[^1] = runEvent;
+                continue;
+            }
+
+            selected.Add(runEvent);
+            previousKey = key;
+        }
+
+        return selected.TakeLast(maxCount).ToList();
+    }
+
+    private static string GetTranscriptKey(RunEvent runEvent)
+    {
+        var percent = runEvent.Percent is null ? "" : runEvent.Percent.Value.ToString("0.###");
+        return string.Join("|", runEvent.Level, runEvent.Kind, runEvent.Distro, runEvent.Backend, runEvent.Phase, runEvent.Message, percent, runEvent.OperationStatus);
     }
 
     private static string FormatDuration(TimeSpan duration)
