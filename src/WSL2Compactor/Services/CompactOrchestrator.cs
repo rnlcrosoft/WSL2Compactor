@@ -75,11 +75,18 @@ internal sealed class CompactOrchestrator
         {
             cancellationToken.ThrowIfCancellationRequested();
             await WaitForVhdUnlockAsync(row, progress, cancellationToken).ConfigureAwait(true);
-            row.BeforeBytes = new FileInfo(row.VhdPath).Length;
+            var beforeSize = VhdxSizeProbe.Read(row.VhdPath);
+            row.BeforeDiskUsageBytes = beforeSize.DiskUsageBytes;
+            row.BeforeVirtualSizeBytes = beforeSize.FileSizeBytes;
             row.Status = "Running compact";
             row.Backend = backendMode == BackendMode.OptimizeVhd ? _optimizeVhdBackend.Name : _virtDiskBackend.Name;
 
-            progress.Report(CompactProgressUpdate.Size("compact", $"Before: {SizeFormatter.Format(row.BeforeBytes)}", beforeBytes: row.BeforeBytes, distro: row.Name, backend: row.Backend));
+            progress.Report(CompactProgressUpdate.Size(
+                "compact",
+                $"Disk usage before: {row.BeforeText}; VHDX size: {row.BeforeVirtualSizeText}",
+                beforeBytes: row.BeforeDiskUsageBytes,
+                distro: row.Name,
+                backend: row.Backend));
 
             try
             {
@@ -128,14 +135,16 @@ internal sealed class CompactOrchestrator
                 }
             }
 
-            row.AfterBytes = new FileInfo(row.VhdPath).Length;
+            var afterSize = VhdxSizeProbe.Read(row.VhdPath);
+            row.AfterDiskUsageBytes = afterSize.DiskUsageBytes;
+            row.AfterVirtualSizeBytes = afterSize.FileSizeBytes;
             row.Status = "Done";
-            var savedBytes = Math.Max(0, row.BeforeBytes - row.AfterBytes.Value);
+            var savedBytes = Math.Max(0, row.BeforeDiskUsageBytes - row.AfterDiskUsageBytes.Value);
             progress.Report(CompactProgressUpdate.Size(
                 "complete",
-                $"After: {SizeFormatter.Format(row.AfterBytes.Value)}; saved: {row.SavedText}",
-                beforeBytes: row.BeforeBytes,
-                afterBytes: row.AfterBytes.Value,
+                $"Disk usage after: {row.AfterText}; saved: {row.SavedText}; VHDX size: {row.AfterVirtualSizeText}",
+                beforeBytes: row.BeforeDiskUsageBytes,
+                afterBytes: row.AfterDiskUsageBytes.Value,
                 savedBytes: savedBytes,
                 distro: row.Name,
                 backend: row.Backend));

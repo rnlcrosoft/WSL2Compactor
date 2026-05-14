@@ -50,9 +50,9 @@ internal sealed partial class WslDistributionService
                 continue;
             }
 
-            var sizeBytes = new FileInfo(vhdPath).Length;
+            var size = VhdxSizeProbe.Read(vhdPath);
             var state = states.TryGetValue(name, out var parsedState) ? parsedState : "Unknown";
-            distributions.Add(new WslDistribution(name, basePath, version, vhdPath, state, sizeBytes));
+            distributions.Add(new WslDistribution(name, basePath, version, vhdPath, state, size.DiskUsageBytes, size.FileSizeBytes));
         }
 
         return distributions.OrderBy(d => d.Name, StringComparer.CurrentCultureIgnoreCase).ToList();

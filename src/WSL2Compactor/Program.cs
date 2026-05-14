@@ -23,7 +23,6 @@ static class Program
         var logFile = Path.Combine(logDirectory, $"wsl2compactor-{DateTime.Now:yyyyMMdd-HHmmss}.log");
 
         var log = new RunLogger(logFile);
-        using var consoleModeGuard = new ConsoleModeGuard(log);
         using var exitGuard = new ExitGuard(log);
         var processRunner = new ProcessRunner();
         var distributionService = new WslDistributionService(processRunner);
@@ -91,10 +90,11 @@ static class Program
             }
 
             var startedAt = DateTimeOffset.Now;
-            var display = new TerminalRunDisplay(rows, log);
+            var display = new TerminalRunDisplay(log);
             exitGuard.SetProtected(true);
             try
             {
+                using var consoleModeGuard = new ConsoleModeGuard(log);
                 await display.RunAsync(
                     (progress, token) => orchestrator.RunAsync(rows, backendMode, progress, token),
                     exitGuard.Token).ConfigureAwait(false);
@@ -157,7 +157,8 @@ static class Program
             .AddColumn("#")
             .AddColumn("Distro")
             .AddColumn("State")
-            .AddColumn(new TableColumn("Size").RightAligned())
+            .AddColumn(new TableColumn("Disk usage").RightAligned())
+            .AddColumn(new TableColumn("VHDX size").RightAligned())
             .AddColumn("VHDX");
 
         for (var index = 0; index < distributions.Count; index++)
@@ -167,7 +168,8 @@ static class Program
                 (index + 1).ToString(),
                 Markup.Escape(distribution.Name),
                 Markup.Escape(distribution.State),
-                SizeFormatter.Format(distribution.SizeBytes),
+                SizeFormatter.Format(distribution.DiskUsageBytes),
+                SizeFormatter.Format(distribution.VirtualSizeBytes),
                 Markup.Escape(distribution.VhdPath));
         }
 
@@ -181,7 +183,8 @@ static class Program
             .Title("Selected distros")
             .AddColumn("Distro")
             .AddColumn("State")
-            .AddColumn(new TableColumn("Current size").RightAligned())
+            .AddColumn(new TableColumn("Disk usage").RightAligned())
+            .AddColumn(new TableColumn("VHDX size").RightAligned())
             .AddColumn("VHDX");
 
         foreach (var row in rows)
@@ -189,7 +192,8 @@ static class Program
             table.AddRow(
                 Markup.Escape(row.Name),
                 Markup.Escape(row.State),
-                SizeFormatter.Format(row.BeforeBytes),
+                row.BeforeText,
+                row.BeforeVirtualSizeText,
                 Markup.Escape(row.VhdPath));
         }
 
@@ -206,7 +210,7 @@ static class Program
 
         options.AddRange(distributions.Select(distribution =>
             new DistributionChoice(
-                $"{distribution.Name} ({SizeFormatter.Format(distribution.SizeBytes)})",
+                $"{distribution.Name} ({SizeFormatter.Format(distribution.DiskUsageBytes)} on disk)",
                 [distribution])));
         options.Add(new DistributionChoice("Cancel", []));
 
@@ -278,31 +282,35 @@ static class Program
             .AddColumn("Started")
             .AddColumn("Ended")
             .AddColumn("Elapsed")
-            .AddColumn("Before")
-            .AddColumn("After")
-            .AddColumn(new TableColumn("Bytes saved").RightAligned())
-            .AddColumn("Saved")
+            .AddColumn("Disk before")
+            .AddColumn("Disk after")
+            .AddColumn(new TableColumn("Disk bytes saved").RightAligned())
+            .AddColumn("Disk saved")
+            .AddColumn("VHDX before")
+            .AddColumn("VHDX after")
             .AddColumn("Backend");
 
         foreach (var row in rows)
         {
-            var savedBytes = Math.Max(0, row.BeforeBytes - (row.AfterBytes ?? row.BeforeBytes));
-            var message = $"Successfully compressed {row.Name}: {savedBytes:N0} bytes saved ({SizeFormatter.Format(savedBytes)}).";
+            var savedBytes = Math.Max(0, row.BeforeDiskUsageBytes - (row.AfterDiskUsageBytes ?? row.BeforeDiskUsageBytes));
+            var message = $"Successfully compacted {row.Name}: {savedBytes:N0} bytes saved on disk ({SizeFormatter.Format(savedBytes)}). VHDX size: {row.BeforeVirtualSizeText} -> {row.AfterVirtualSizeText}.";
             table.AddRow(
                 Markup.Escape(row.Name),
                 startedAt.ToString("yyyy-MM-dd HH:mm:ss zzz"),
                 endedAt.ToString("yyyy-MM-dd HH:mm:ss zzz"),
                 FormatDuration(endedAt - startedAt),
-                SizeFormatter.Format(row.BeforeBytes),
-                row.AfterBytes is null ? "-" : SizeFormatter.Format(row.AfterBytes.Value),
+                row.BeforeText,
+                row.AfterText,
                 savedBytes.ToString("N0"),
                 SizeFormatter.Format(savedBytes),
+                row.BeforeVirtualSizeText,
+                row.AfterVirtualSizeText,
                 Markup.Escape(row.Backend));
             log.Write(CompactProgressUpdate.Size(
                 "summary",
                 message,
-                beforeBytes: row.BeforeBytes,
-                afterBytes: row.AfterBytes,
+                beforeBytes: row.BeforeDiskUsageBytes,
+                afterBytes: row.AfterDiskUsageBytes,
                 savedBytes: savedBytes,
                 distro: row.Name,
                 backend: row.Backend));
@@ -323,7 +331,7 @@ static class Program
         => Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
 
     private static string FormatDistributionForLog(WslDistribution distribution)
-        => $"{distribution.Name}; state={distribution.State}; size={distribution.SizeBytes}; vhd={distribution.VhdPath}";
+        => $"{distribution.Name}; state={distribution.State}; diskUsage={distribution.DiskUsageBytes}; virtualSize={distribution.VirtualSizeBytes}; vhd={distribution.VhdPath}";
 
     private sealed record DistributionChoice(string Label, IReadOnlyList<WslDistribution> Distributions);
 

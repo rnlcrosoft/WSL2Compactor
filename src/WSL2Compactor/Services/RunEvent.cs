@@ -65,9 +65,9 @@ internal sealed record RunEvent(
         Add(parts, "completionValue", CompletionValue?.ToString());
         Add(parts, "command", Command);
         Add(parts, "exitCode", ExitCode?.ToString());
-        Add(parts, "before", BeforeBytes is null ? null : $"{BeforeBytes} ({SizeFormatter.Format(BeforeBytes.Value)})");
-        Add(parts, "after", AfterBytes is null ? null : $"{AfterBytes} ({SizeFormatter.Format(AfterBytes.Value)})");
-        Add(parts, "saved", SavedBytes is null ? null : $"{SavedBytes} ({SizeFormatter.Format(SavedBytes.Value)})");
+        Add(parts, "beforeDiskUsage", BeforeBytes is null ? null : $"{BeforeBytes} ({SizeFormatter.Format(BeforeBytes.Value)})");
+        Add(parts, "afterDiskUsage", AfterBytes is null ? null : $"{AfterBytes} ({SizeFormatter.Format(AfterBytes.Value)})");
+        Add(parts, "savedDiskUsage", SavedBytes is null ? null : $"{SavedBytes} ({SizeFormatter.Format(SavedBytes.Value)})");
         Add(parts, "message", Message);
 
         return string.Join(" ", parts);

@@ -6,7 +6,8 @@ internal sealed record WslDistribution(
     int Version,
     string VhdPath,
     string State,
-    long SizeBytes)
+    long DiskUsageBytes,
+    long VirtualSizeBytes)
 {
     public bool IsWsl2 => Version == 2;
 }

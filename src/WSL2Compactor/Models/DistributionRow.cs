@@ -6,15 +6,18 @@ namespace WSL2Compactor.Models;
 internal sealed class DistributionRow : INotifyPropertyChanged
 {
     private bool _selected = true;
-    private long _beforeBytes;
-    private long? _afterBytes;
+    private long _beforeDiskUsageBytes;
+    private long? _afterDiskUsageBytes;
+    private long _beforeVirtualSizeBytes;
+    private long? _afterVirtualSizeBytes;
     private string _backend = "";
     private string _status = "Pending";
 
     public DistributionRow(WslDistribution distribution)
     {
         Distribution = distribution;
-        _beforeBytes = distribution.SizeBytes;
+        _beforeDiskUsageBytes = distribution.DiskUsageBytes;
+        _beforeVirtualSizeBytes = distribution.VirtualSizeBytes;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -33,12 +36,12 @@ internal sealed class DistributionRow : INotifyPropertyChanged
 
     public string VhdPath => Distribution.VhdPath;
 
-    public long BeforeBytes
+    public long BeforeDiskUsageBytes
     {
-        get => _beforeBytes;
+        get => _beforeDiskUsageBytes;
         set
         {
-            if (SetField(ref _beforeBytes, value))
+            if (SetField(ref _beforeDiskUsageBytes, value))
             {
                 OnPropertyChanged(nameof(BeforeText));
                 OnPropertyChanged(nameof(SavedText));
@@ -46,15 +49,39 @@ internal sealed class DistributionRow : INotifyPropertyChanged
         }
     }
 
-    public long? AfterBytes
+    public long? AfterDiskUsageBytes
     {
-        get => _afterBytes;
+        get => _afterDiskUsageBytes;
         set
         {
-            if (SetField(ref _afterBytes, value))
+            if (SetField(ref _afterDiskUsageBytes, value))
             {
                 OnPropertyChanged(nameof(AfterText));
                 OnPropertyChanged(nameof(SavedText));
+            }
+        }
+    }
+
+    public long BeforeVirtualSizeBytes
+    {
+        get => _beforeVirtualSizeBytes;
+        set
+        {
+            if (SetField(ref _beforeVirtualSizeBytes, value))
+            {
+                OnPropertyChanged(nameof(BeforeVirtualSizeText));
+            }
+        }
+    }
+
+    public long? AfterVirtualSizeBytes
+    {
+        get => _afterVirtualSizeBytes;
+        set
+        {
+            if (SetField(ref _afterVirtualSizeBytes, value))
+            {
+                OnPropertyChanged(nameof(AfterVirtualSizeText));
             }
         }
     }
@@ -71,20 +98,24 @@ internal sealed class DistributionRow : INotifyPropertyChanged
         set => SetField(ref _status, value);
     }
 
-    public string BeforeText => SizeFormatter.Format(BeforeBytes);
+    public string BeforeText => SizeFormatter.Format(BeforeDiskUsageBytes);
 
-    public string AfterText => AfterBytes is null ? "-" : SizeFormatter.Format(AfterBytes.Value);
+    public string AfterText => AfterDiskUsageBytes is null ? "-" : SizeFormatter.Format(AfterDiskUsageBytes.Value);
+
+    public string BeforeVirtualSizeText => SizeFormatter.Format(BeforeVirtualSizeBytes);
+
+    public string AfterVirtualSizeText => AfterVirtualSizeBytes is null ? "-" : SizeFormatter.Format(AfterVirtualSizeBytes.Value);
 
     public string SavedText
     {
         get
         {
-            if (AfterBytes is null)
+            if (AfterDiskUsageBytes is null)
             {
                 return "-";
             }
 
-            var saved = BeforeBytes - AfterBytes.Value;
+            var saved = BeforeDiskUsageBytes - AfterDiskUsageBytes.Value;
             return saved <= 0 ? "0 B" : SizeFormatter.Format(saved);
         }
     }

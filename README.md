@@ -22,6 +22,8 @@ The default backend is `virtdisk.dll` / `CompactVirtualDisk` with `COMPACT_VIRTU
 
 If the VirtDisk API fails, the app falls back to `diskpart compact vdisk`. `Optimize-VHD` is offered only when it already exists on the machine.
 
+The size columns use Windows allocated disk usage for the primary before/after/saved values. The VHDX file length is shown separately as `VHDX size` because sparse VHDX compaction is about freeing allocated host-disk space, not just changing the file's logical length.
+
 > [!NOTE]
 > `Optimize-VHD` is installed with Hyper-V tooling. On Windows Home, Hyper-V is not exposed by default. If you want to make the Hyper-V `Optimize-VHD` backend available through an unofficial DISM package route, this gist describes one approach: [Hyper-V in Windows 10 and Windows 11 Home Edition](https://gist.github.com/HimDek/6edde284203a620745fad3f762be603b). Expect a Windows reboot after changing Hyper-V features.
 
