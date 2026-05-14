@@ -42,7 +42,7 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            await CompactWithProgressAsync(handle, progress, cancellationToken).ConfigureAwait(false);
+            await CompactWithProgressAsync(handle, vhdPath, progress, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -58,13 +58,20 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
 
     private static async Task CompactWithProgressAsync(
         SafeFileHandle handle,
+        string vhdPath,
         IProgress<CompactProgressUpdate> progress,
         CancellationToken cancellationToken)
     {
         var eventHandle = CreateEvent(IntPtr.Zero, bManualReset: true, bInitialState: false, lpName: null);
         if (eventHandle == IntPtr.Zero)
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateEvent failed.");
+            var errorCode = (uint)Marshal.GetLastWin32Error();
+            throw CompactFailureException.FromWin32(
+                errorCode,
+                "VirtDisk",
+                $"CreateEvent failed: {FormatWin32Error(errorCode)}",
+                backend: BackendName,
+                vhdPath: vhdPath);
         }
 
         var overlappedPtr = IntPtr.Zero;
@@ -96,7 +103,12 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
             }
             if (compactResult != ErrorIoPending)
             {
-                throw new Win32Exception((int)compactResult, $"CompactVirtualDisk failed: {FormatWin32Error(compactResult)}");
+                throw CompactFailureException.FromWin32(
+                    compactResult,
+                    "VirtDisk",
+                    $"CompactVirtualDisk failed: {FormatWin32Error(compactResult)}",
+                    backend: BackendName,
+                    vhdPath: vhdPath);
             }
 
             var maxPercent = 5d;
@@ -107,16 +119,28 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
                 var progressResult = GetVirtualDiskOperationProgress(handle, overlappedPtr, out var virtualDiskProgress);
                 if (progressResult != ErrorSuccess)
                 {
-                    throw new Win32Exception((int)progressResult, $"GetVirtualDiskOperationProgress failed: {FormatWin32Error(progressResult)}");
+                    throw CompactFailureException.FromWin32(
+                        progressResult,
+                        "VirtDisk",
+                        $"GetVirtualDiskOperationProgress failed: {FormatWin32Error(progressResult)}",
+                        backend: BackendName,
+                        vhdPath: vhdPath);
                 }
 
                 if (virtualDiskProgress.OperationStatus == ErrorIoPending)
                 {
                     var calculatedPercent = CalculatePercent(virtualDiskProgress);
-                    maxPercent = Math.Max(maxPercent, calculatedPercent);
-                    var message = calculatedPercent >= 100
-                        ? "CompactVirtualDisk pending completion"
-                        : "CompactVirtualDisk running";
+                    var progressMode = calculatedPercent is > 0 and < 99.5
+                        ? CompactProgressMode.PercentKnown
+                        : CompactProgressMode.PendingNoReliablePercent;
+                    if (progressMode == CompactProgressMode.PercentKnown)
+                    {
+                        maxPercent = Math.Min(99, Math.Max(maxPercent, calculatedPercent));
+                    }
+
+                    var message = progressMode == CompactProgressMode.PercentKnown
+                        ? "CompactVirtualDisk running"
+                        : "waiting for VirtDisk completion";
 
                     progress.Report(CompactProgressUpdate.Progress(
                         "VirtDisk",
@@ -127,7 +151,8 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
                         currentValue: virtualDiskProgress.CurrentValue,
                         completionValue: virtualDiskProgress.CompletionValue,
                         operationStatus: virtualDiskProgress.OperationStatus,
-                        calculatedPercent: calculatedPercent));
+                        calculatedPercent: calculatedPercent,
+                        progressMode: progressMode));
 
                     await Task.Delay(1000, cancellationToken).ConfigureAwait(false);
                     continue;
@@ -135,7 +160,12 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
 
                 if (virtualDiskProgress.OperationStatus != ErrorSuccess)
                 {
-                    throw new Win32Exception((int)virtualDiskProgress.OperationStatus, $"CompactVirtualDisk failed: {FormatWin32Error(virtualDiskProgress.OperationStatus)}");
+                    throw CompactFailureException.FromWin32(
+                        virtualDiskProgress.OperationStatus,
+                        "VirtDisk",
+                        $"CompactVirtualDisk failed: {FormatWin32Error(virtualDiskProgress.OperationStatus)}",
+                        backend: BackendName,
+                        vhdPath: vhdPath);
                 }
 
                 progress.Report(CompactProgressUpdate.Complete("VirtDisk", "CompactVirtualDisk completed", backend: BackendName));
@@ -188,7 +218,12 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
 
         if (result != 0)
         {
-            throw new Win32Exception((int)result, $"OpenVirtualDisk failed: {FormatWin32Error(result)}");
+            throw CompactFailureException.FromWin32(
+                result,
+                "VirtDisk",
+                $"OpenVirtualDisk failed: {FormatWin32Error(result)}",
+                backend: BackendName,
+                vhdPath: vhdPath);
         }
 
         return handle;

@@ -36,7 +36,14 @@ internal sealed class DiskPartCompactBackend : ICompactBackend
 
             if (!result.Succeeded)
             {
-                throw new InvalidOperationException($"diskpart compact vdisk failed with exit code {result.ExitCode}.");
+                throw new CompactFailureException(
+                    CompactFailureKind.CommandFailed,
+                    "DiskPart",
+                    $"diskpart compact vdisk failed with exit code {result.ExitCode}.",
+                    backend: Name,
+                    vhdPath: vhdPath,
+                    exitCode: result.ExitCode,
+                    fallbackAllowed: false);
             }
 
             progress.Report(CompactProgressUpdate.Complete("DiskPart", "completed", backend: Name));

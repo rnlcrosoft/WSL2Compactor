@@ -30,6 +30,7 @@ internal sealed class ProcessRunner
         using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
+        var stopwatch = Stopwatch.StartNew();
 
         process.OutputDataReceived += (_, args) =>
         {
@@ -70,8 +71,10 @@ internal sealed class ProcessRunner
         }
 
         await Task.Run(process.WaitForExit, CancellationToken.None).ConfigureAwait(false);
+        stopwatch.Stop();
 
         log?.Report($"Exit code: {process.ExitCode}");
+        log?.Report($"Elapsed: {stopwatch.Elapsed:c}");
 
         return new ProcessResult(process.ExitCode, stdout.ToString(), stderr.ToString());
     }

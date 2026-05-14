@@ -20,7 +20,7 @@ internal sealed class OptimizeVhdCompactBackend : ICompactBackend
     public async Task CompactAsync(string vhdPath, IProgress<CompactProgressUpdate> progress, CancellationToken cancellationToken)
     {
         var escapedPath = vhdPath.Replace("'", "''");
-        var command = $"Optimize-VHD -Path '{escapedPath}' -Mode Full";
+        var command = $"Optimize-VHD -Path '{escapedPath}' -Mode Quick";
         progress.Report(CompactProgressUpdate.Indeterminate("Optimize-VHD", "running", backend: Name));
         var result = await _processRunner.RunAsync(
             "powershell.exe",
@@ -30,7 +30,14 @@ internal sealed class OptimizeVhdCompactBackend : ICompactBackend
 
         if (!result.Succeeded)
         {
-            throw new InvalidOperationException($"Optimize-VHD failed with exit code {result.ExitCode}.");
+            throw new CompactFailureException(
+                CompactFailureKind.CommandFailed,
+                "Optimize-VHD",
+                $"Optimize-VHD failed with exit code {result.ExitCode}.",
+                backend: Name,
+                vhdPath: vhdPath,
+                exitCode: result.ExitCode,
+                fallbackAllowed: true);
         }
 
         progress.Report(CompactProgressUpdate.Complete("Optimize-VHD", "completed", backend: Name));

@@ -1,5 +1,6 @@
 namespace WSL2Compactor;
 
+using System.Reflection;
 using System.Security.Principal;
 using Spectre.Console;
 using WSL2Compactor.Models;
@@ -8,6 +9,7 @@ using WSL2Compactor.Services;
 static class Program
 {
     private const string AppName = "WSL2Compactor";
+    private const string IssueUrl = "https://github.com/rnlcrosoft/WSL2Compactor/issues/new";
 
     static async Task<int> Main()
     {
@@ -33,23 +35,27 @@ static class Program
         try
         {
             PrintHeader();
+            var elevated = IsRunningAsAdministrator();
+            log.Info("startup", $"App version: {GetAppVersion()}");
+            log.Info("startup", $"Command line: {Environment.CommandLine}");
+            log.Info("startup", $"OS version: {Environment.OSVersion}");
+            log.Info("startup", $"Elevated: {elevated}");
             log.Info("startup", $"Log file: {logFile}");
 
-            if (!IsRunningAsAdministrator())
+            if (!elevated)
             {
-                log.Warning("startup", "This process is not elevated. Published builds request administrator privileges automatically.");
-                AnsiConsole.MarkupLine("[yellow]Warning:[/] This process is not elevated.");
-                var continueAnyway = AnsiConsole.Confirm("Continue anyway?", defaultValue: true);
-                log.Prompt("startup", $"Continue without elevation: {continueAnyway}");
-                if (!continueAnyway)
-                {
-                    return 1;
-                }
+                log.Error("startup", "Administrator privileges are required for Windows-side VHDX compaction.");
+                AnsiConsole.MarkupLine("[red]Administrator privileges are required for Windows-side VHDX compaction.[/]");
+                AnsiConsole.MarkupLine($"Log saved to: [grey]{Markup.Escape(log.LogFile)}[/]");
+                return 1;
             }
 
             log.Info("scan", "Scanning WSL2 distros.");
             AnsiConsole.MarkupLine("[grey]Scanning WSL2 distros...[/]");
             var distributions = await distributionService.GetDistributionsAsync(CancellationToken.None).ConfigureAwait(false);
+            log.Info("scan", distributions.Count == 0
+                ? "Detected distros: none"
+                : $"Detected distros: {string.Join(" | ", distributions.Select(FormatDistributionForLog))}");
             if (distributions.Count == 0)
             {
                 log.Warning("scan", "No WSL2 ext4.vhdx files were found.");
@@ -69,7 +75,9 @@ static class Program
             }
 
             var rows = selected.Select(distribution => new DistributionRow(distribution)).ToList();
-            var backendMode = await PromptForBackendAsync(optimizeVhdBackend).ConfigureAwait(false);
+            var optimizeAvailable = await optimizeVhdBackend.IsAvailableAsync(CancellationToken.None).ConfigureAwait(false);
+            log.Info("selection", $"Optimize-VHD available: {optimizeAvailable}");
+            var backendMode = PromptForBackend(optimizeAvailable);
             log.Prompt("selection", $"Selected backend mode: {backendMode}");
 
             PrintSelectedDistributions(rows);
@@ -112,12 +120,25 @@ static class Program
             AnsiConsole.MarkupLine($"Log saved to: [grey]{Markup.Escape(log.LogFile)}[/]");
             return 130;
         }
+        catch (CompactFailureException ex)
+        {
+            exitGuard.SetProtected(false);
+            log.Error("error", ex.ToString(), ex.Distro, ex.Backend);
+            PrintFailurePanel(ex, log);
+            return 1;
+        }
         catch (Exception ex)
         {
             exitGuard.SetProtected(false);
             log.Error("error", ex.ToString());
-            AnsiConsole.MarkupLine($"[red]Error:[/] {Markup.Escape(ex.Message)}");
-            AnsiConsole.MarkupLine($"Log saved to: [grey]{Markup.Escape(log.LogFile)}[/]");
+            PrintFailurePanel(
+                new CompactFailureException(
+                    CompactFailureKind.Unknown,
+                    "error",
+                    ex.Message,
+                    fallbackAllowed: false,
+                    innerException: ex),
+                log);
             return 1;
         }
     }
@@ -200,10 +221,8 @@ static class Program
         return choice.Distributions;
     }
 
-    private static async Task<BackendMode> PromptForBackendAsync(OptimizeVhdCompactBackend optimizeVhdBackend)
+    private static BackendMode PromptForBackend(bool optimizeAvailable)
     {
-        var optimizeAvailable = await optimizeVhdBackend.IsAvailableAsync(CancellationToken.None).ConfigureAwait(false);
-
         var options = new List<BackendChoice>
         {
             new("VirtDisk API (recommended, fallback: DiskPart)", BackendMode.VirtDisk)
@@ -221,6 +240,29 @@ static class Program
                 .AddChoices(options));
 
         return choice.Mode;
+    }
+
+    private static void PrintFailurePanel(CompactFailureException failure, RunLogger log)
+    {
+        var table = new Table().Expand();
+        table.AddColumn("Field");
+        table.AddColumn("Value");
+        table.AddRow("Kind", Markup.Escape(failure.Kind.ToString()));
+        table.AddRow("Phase", Markup.Escape(failure.Phase));
+        table.AddRow("Distro", Markup.Escape(failure.Distro ?? "-"));
+        table.AddRow("Backend", Markup.Escape(failure.Backend ?? "-"));
+        table.AddRow("VHDX", Markup.Escape(failure.VhdPath ?? "-"));
+        table.AddRow("Error", Markup.Escape(failure.Message));
+        table.AddRow("Exit code", Markup.Escape(failure.ExitCode?.ToString() ?? "-"));
+        table.AddRow("Win32 error", Markup.Escape(failure.Win32ErrorCode is null ? "-" : $"0x{failure.Win32ErrorCode:X8}"));
+        table.AddRow("Log", Markup.Escape(log.LogFile));
+        table.AddRow("Issue URL", Markup.Escape(IssueUrl));
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(new Panel(table)
+            .Header("Failure")
+            .BorderColor(Color.Red)
+            .Expand());
     }
 
     private static void PrintSummary(
@@ -276,6 +318,12 @@ static class Program
         var principal = new WindowsPrincipal(identity);
         return principal.IsInRole(WindowsBuiltInRole.Administrator);
     }
+
+    private static string GetAppVersion()
+        => Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
+
+    private static string FormatDistributionForLog(WslDistribution distribution)
+        => $"{distribution.Name}; state={distribution.State}; size={distribution.SizeBytes}; vhd={distribution.VhdPath}";
 
     private sealed record DistributionChoice(string Label, IReadOnlyList<WslDistribution> Distributions);
 

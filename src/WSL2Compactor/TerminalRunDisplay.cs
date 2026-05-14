@@ -30,6 +30,11 @@ internal sealed class TerminalRunDisplay : IProgress<CompactProgressUpdate>
         var runEvent = RunEvent.FromUpdate(value);
         _log.Write(runEvent);
 
+        if (IsLowPriorityCurrentEvent(value))
+        {
+            return;
+        }
+
         lock (_gate)
         {
             var phaseKey = $"{value.Distro}|{value.Backend}|{value.Phase}";
@@ -192,8 +197,8 @@ internal sealed class TerminalRunDisplay : IProgress<CompactProgressUpdate>
 
         if (runEvent.Percent is { } percent)
         {
-            text += runEvent is { IsComplete: false, OperationStatus: 997, Percent: >= 100 }
-                ? " [grey](API 100%, pending)[/]"
+            text += runEvent.ProgressMode == CompactProgressMode.PendingNoReliablePercent
+                ? " [grey](pending)[/]"
                 : $" [grey]({percent:0.#}%)[/]";
         }
 
@@ -202,14 +207,24 @@ internal sealed class TerminalRunDisplay : IProgress<CompactProgressUpdate>
 
     private static string BuildProgressText(CompactProgressUpdate? current, int spinnerIndex)
     {
-        if (current?.Percent is not { } percent)
+        if (current is null)
         {
             return $"{SpinnerFrames[spinnerIndex % SpinnerFrames.Length]} running";
         }
 
-        if (!current.IsComplete && current.OperationStatus == 997 && percent >= 100)
+        if (current.ProgressMode is CompactProgressMode.Indeterminate)
         {
-            return $"{SpinnerFrames[spinnerIndex % SpinnerFrames.Length]} compacting; API reports 100%, operation still pending";
+            return $"{SpinnerFrames[spinnerIndex % SpinnerFrames.Length]} running";
+        }
+
+        if (current.ProgressMode is CompactProgressMode.PendingNoReliablePercent)
+        {
+            return $"{SpinnerFrames[spinnerIndex % SpinnerFrames.Length]} waiting for VirtDisk completion";
+        }
+
+        if (current.Percent is not { } percent)
+        {
+            return $"{SpinnerFrames[spinnerIndex % SpinnerFrames.Length]} running";
         }
 
         var displayPercent = Math.Clamp(percent, 0, 100);
@@ -247,7 +262,9 @@ internal sealed class TerminalRunDisplay : IProgress<CompactProgressUpdate>
 
     private static string EstimateEta(CompactProgressUpdate? current, TimeSpan phaseElapsed)
     {
-        if (current?.Percent is not { } percent || percent <= 0)
+        if (current?.ProgressMode != CompactProgressMode.PercentKnown
+            || current.Percent is not { } percent
+            || percent <= 0)
         {
             return "-";
         }
@@ -295,8 +312,11 @@ internal sealed class TerminalRunDisplay : IProgress<CompactProgressUpdate>
     private static string GetTranscriptKey(RunEvent runEvent)
     {
         var percent = runEvent.Percent is null ? "" : runEvent.Percent.Value.ToString("0.###");
-        return string.Join("|", runEvent.Level, runEvent.Kind, runEvent.Distro, runEvent.Backend, runEvent.Phase, runEvent.Message, percent, runEvent.OperationStatus);
+        return string.Join("|", runEvent.Level, runEvent.Kind, runEvent.Distro, runEvent.Backend, runEvent.Phase, runEvent.Message, percent, runEvent.ProgressMode, runEvent.OperationStatus);
     }
+
+    private static bool IsLowPriorityCurrentEvent(CompactProgressUpdate update)
+        => string.Equals(update.Phase, "format guard", StringComparison.OrdinalIgnoreCase);
 
     private static string FormatDuration(TimeSpan duration)
     {

@@ -25,6 +25,7 @@ jobs:
       PUBLISH_DIR: artifacts/publish
       RELEASE_DIR: artifacts/release
       ASSET_NAME: WSL2Compactor-win-x64.exe
+      MAX_EXE_SIZE_BYTES: "26214400"
 
     steps:
       - name: Resolve release tag
@@ -87,7 +88,15 @@ jobs:
 
           $publishedExe = Join-Path $env:PUBLISH_DIR "WSL2Compactor.exe"
           $releaseExe = Join-Path $env:RELEASE_DIR $env:ASSET_NAME
+          if (-not (Test-Path $publishedExe)) {
+            throw "Published executable not found: $publishedExe"
+          }
+
           Copy-Item $publishedExe $releaseExe -Force
+          $releaseSize = (Get-Item $releaseExe).Length
+          if ($releaseSize -gt [int64]$env:MAX_EXE_SIZE_BYTES) {
+            throw "Release executable is too large: $releaseSize bytes. Limit: $env:MAX_EXE_SIZE_BYTES bytes."
+          }
 
           Push-Location $env:RELEASE_DIR
           $checksumName = "$($env:ASSET_NAME).sha256"

@@ -11,6 +11,7 @@ internal sealed record RunEvent(
     string? Distro = null,
     string? Backend = null,
     double? Percent = null,
+    CompactProgressMode ProgressMode = CompactProgressMode.Indeterminate,
     bool IsComplete = false,
     string? Command = null,
     int? ExitCode = null,
@@ -32,6 +33,7 @@ internal sealed record RunEvent(
             update.Distro,
             update.Backend,
             update.Percent,
+            update.ProgressMode,
             update.IsComplete,
             update.Command,
             update.ExitCode,
@@ -56,6 +58,7 @@ internal sealed record RunEvent(
         Add(parts, "distro", Distro);
         Add(parts, "backend", Backend);
         Add(parts, "percent", Percent?.ToString("0.###"));
+        Add(parts, "progressMode", ProgressMode.ToString());
         Add(parts, "calculatedPercent", CalculatedPercent?.ToString("0.###"));
         Add(parts, "operationStatus", OperationStatus is null ? null : $"0x{OperationStatus:X8}");
         Add(parts, "currentValue", CurrentValue?.ToString());

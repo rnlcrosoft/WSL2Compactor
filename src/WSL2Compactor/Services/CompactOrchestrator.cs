@@ -34,6 +34,7 @@ internal sealed class CompactOrchestrator
         CancellationToken cancellationToken)
     {
         using var formatPromptGuard = new FormatPromptGuard(new ProcessProgressAdapter(progress, "format guard"));
+        TestHooks.ReportActiveHooks(progress);
 
         foreach (var row in rows)
         {
@@ -41,11 +42,13 @@ internal sealed class CompactOrchestrator
             row.Status = "Running fstrim";
             progress.Report(CompactProgressUpdate.Indeterminate("fstrim", "running", row.Name));
 
-            var trimResult = await _processRunner.RunAsync(
-                "wsl.exe",
-                ["-d", row.Name, "--user", "root", "fstrim", "-av"],
-                new ProcessProgressAdapter(progress, "fstrim", row.Name),
-                cancellationToken).ConfigureAwait(true);
+            var trimResult = TestHooks.IsEnabled(TestHooks.FailFstrim)
+                ? new ProcessResult(1, string.Empty, "Injected fstrim failure.")
+                : await _processRunner.RunAsync(
+                    "wsl.exe",
+                    ["-d", row.Name, "--user", "root", "fstrim", "-av"],
+                    new ProcessProgressAdapter(progress, "fstrim", row.Name),
+                    cancellationToken).ConfigureAwait(true);
 
             if (!trimResult.Succeeded)
             {
@@ -86,15 +89,43 @@ internal sealed class CompactOrchestrator
                 }
                 else
                 {
+                    if (TestHooks.IsEnabled(TestHooks.FailVirtDisk))
+                    {
+                        throw new CompactFailureException(
+                            CompactFailureKind.Backend,
+                            "VirtDisk",
+                            "Injected VirtDisk failure.",
+                            row.Name,
+                            _virtDiskBackend.Name,
+                            row.VhdPath,
+                            fallbackAllowed: true);
+                    }
+
                     await _virtDiskBackend.CompactAsync(row.VhdPath, new DistroProgress(progress, row.Name, _virtDiskBackend.Name), cancellationToken).ConfigureAwait(true);
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                progress.Report(CompactProgressUpdate.Warning("fallback", $"{row.Backend} failed: {ex.Message}", row.Name, row.Backend));
+                var failure = ToCompactFailure(ex, row, phase: "compact", fallbackAllowed: true);
+                if (!failure.FallbackAllowed)
+                {
+                    row.Status = "Failed";
+                    progress.Report(CompactProgressUpdate.Warning("compact", $"{row.Backend} failed without fallback: {failure.Message}", row.Name, row.Backend));
+                    throw failure;
+                }
+
+                progress.Report(CompactProgressUpdate.Warning("fallback", $"{row.Backend} failed: {failure.Message}", row.Name, row.Backend));
                 progress.Report(CompactProgressUpdate.Indeterminate("fallback", "Running DiskPart fallback.", row.Name, _diskPartBackend.Name));
                 row.Backend = _diskPartBackend.Name;
-                await _diskPartBackend.CompactAsync(row.VhdPath, new DistroProgress(progress, row.Name, _diskPartBackend.Name), cancellationToken).ConfigureAwait(true);
+                try
+                {
+                    await _diskPartBackend.CompactAsync(row.VhdPath, new DistroProgress(progress, row.Name, _diskPartBackend.Name), cancellationToken).ConfigureAwait(true);
+                }
+                catch (Exception fallbackEx) when (fallbackEx is not OperationCanceledException)
+                {
+                    row.Status = "Failed";
+                    throw ToCompactFailure(fallbackEx, row, phase: "DiskPart", fallbackAllowed: false);
+                }
             }
 
             row.AfterBytes = new FileInfo(row.VhdPath).Length;
@@ -114,8 +145,32 @@ internal sealed class CompactOrchestrator
 
     private static async Task WaitForVhdUnlockAsync(DistributionRow row, IProgress<CompactProgressUpdate> progress, CancellationToken cancellationToken)
     {
+        if (TestHooks.IsEnabled(TestHooks.LockedVhd))
+        {
+            progress.Report(CompactProgressUpdate.Warning("lock check", "Injected locked VHDX failure.", row.Name));
+            throw new CompactFailureException(
+                CompactFailureKind.Locked,
+                "lock check",
+                "Injected locked VHDX failure. Another process may still be holding the VHDX.",
+                row.Name,
+                vhdPath: row.VhdPath,
+                fallbackAllowed: false);
+        }
+
+        if (!File.Exists(row.VhdPath))
+        {
+            throw new CompactFailureException(
+                CompactFailureKind.Missing,
+                "lock check",
+                $"VHDX file was not found: {row.VhdPath}",
+                row.Name,
+                vhdPath: row.VhdPath,
+                fallbackAllowed: false);
+        }
+
         var deadline = DateTimeOffset.UtcNow.AddSeconds(20);
         var attempt = 0;
+        Exception? lastException = null;
 
         while (true)
         {
@@ -130,15 +185,77 @@ internal sealed class CompactOrchestrator
             }
             catch (IOException ex) when (DateTimeOffset.UtcNow < deadline)
             {
+                lastException = ex;
                 progress.Report(CompactProgressUpdate.Indeterminate("lock check", $"waiting ({attempt}) {ex.Message}", row.Name));
                 await Task.Delay(1000, cancellationToken).ConfigureAwait(true);
             }
             catch (UnauthorizedAccessException ex) when (DateTimeOffset.UtcNow < deadline)
             {
+                lastException = ex;
                 progress.Report(CompactProgressUpdate.Indeterminate("lock check", $"waiting ({attempt}) {ex.Message}", row.Name));
                 await Task.Delay(1000, cancellationToken).ConfigureAwait(true);
             }
+            catch (IOException ex)
+            {
+                lastException = ex;
+                throw CreateLockedFailure(row, lastException);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                lastException = ex;
+                throw new CompactFailureException(
+                    CompactFailureKind.AccessDenied,
+                    "lock check",
+                    $"VHDX could not be opened after WSL shutdown: {ex.Message}",
+                    row.Name,
+                    vhdPath: row.VhdPath,
+                    fallbackAllowed: false,
+                    innerException: ex);
+            }
+
+            if (DateTimeOffset.UtcNow >= deadline)
+            {
+                throw CreateLockedFailure(row, lastException);
+            }
         }
+    }
+
+    private static CompactFailureException CreateLockedFailure(DistributionRow row, Exception? innerException)
+        => new(
+            CompactFailureKind.Locked,
+            "lock check",
+            "VHDX could not be opened after WSL shutdown. Another process may still be holding the VHDX.",
+            row.Name,
+            vhdPath: row.VhdPath,
+            fallbackAllowed: false,
+            innerException: innerException);
+
+    private static CompactFailureException ToCompactFailure(Exception exception, DistributionRow row, string phase, bool fallbackAllowed)
+    {
+        if (exception is CompactFailureException failure)
+        {
+            return new CompactFailureException(
+                failure.Kind,
+                failure.Phase,
+                failure.Message,
+                failure.Distro ?? row.Name,
+                failure.Backend ?? (string.IsNullOrWhiteSpace(row.Backend) ? null : row.Backend),
+                failure.VhdPath ?? row.VhdPath,
+                failure.ExitCode,
+                failure.Win32ErrorCode,
+                failure.FallbackAllowed,
+                failure);
+        }
+
+        return new CompactFailureException(
+                CompactFailureKind.Unknown,
+                phase,
+                exception.Message,
+                row.Name,
+                row.Backend,
+                row.VhdPath,
+                fallbackAllowed: fallbackAllowed,
+                innerException: exception);
     }
 
     private sealed class DistroProgress : IProgress<CompactProgressUpdate>

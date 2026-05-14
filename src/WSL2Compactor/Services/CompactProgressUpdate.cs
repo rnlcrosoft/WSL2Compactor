@@ -20,12 +20,20 @@ internal enum CompactEventKind
     Complete
 }
 
+internal enum CompactProgressMode
+{
+    Indeterminate,
+    PercentKnown,
+    PendingNoReliablePercent
+}
+
 internal sealed record CompactProgressUpdate(
     string Phase,
     string Message,
     string? Distro = null,
     string? Backend = null,
     double? Percent = null,
+    CompactProgressMode ProgressMode = CompactProgressMode.Indeterminate,
     bool IsComplete = false,
     CompactEventLevel Level = CompactEventLevel.Info,
     CompactEventKind Kind = CompactEventKind.Event,
@@ -67,7 +75,7 @@ internal sealed record CompactProgressUpdate(
         => new(phase, message, distro, backend);
 
     public static CompactProgressUpdate Progress(string phase, string message, double percent, string? distro = null, string? backend = null)
-        => new(phase, message, distro, backend, Math.Clamp(percent, 0, 100), Kind: CompactEventKind.Progress);
+        => new(phase, message, distro, backend, Math.Clamp(percent, 0, 100), CompactProgressMode.PercentKnown, Kind: CompactEventKind.Progress);
 
     public static CompactProgressUpdate Progress(
         string phase,
@@ -78,13 +86,15 @@ internal sealed record CompactProgressUpdate(
         ulong currentValue,
         ulong completionValue,
         uint operationStatus,
-        double calculatedPercent)
+        double calculatedPercent,
+        CompactProgressMode progressMode = CompactProgressMode.PercentKnown)
         => new(
             phase,
             message,
             distro,
             backend,
             Math.Clamp(percent, 0, 100),
+            progressMode,
             Kind: CompactEventKind.Progress,
             CurrentValue: currentValue,
             CompletionValue: completionValue,
@@ -92,5 +102,5 @@ internal sealed record CompactProgressUpdate(
             CalculatedPercent: calculatedPercent);
 
     public static CompactProgressUpdate Complete(string phase, string message, string? distro = null, string? backend = null)
-        => new(phase, message, distro, backend, 100, IsComplete: true, Kind: CompactEventKind.Complete);
+        => new(phase, message, distro, backend, 100, CompactProgressMode.PercentKnown, IsComplete: true, Kind: CompactEventKind.Complete);
 }
