@@ -25,13 +25,13 @@ If the VirtDisk API fails, the app falls back to `diskpart compact vdisk`. `Opti
 > [!NOTE]
 > `Optimize-VHD` is installed with Hyper-V tooling. On Windows Home, Hyper-V is not exposed by default. If you want to make the Hyper-V `Optimize-VHD` backend available through an unofficial DISM package route, this gist describes one approach: [Hyper-V in Windows 10 and Windows 11 Home Edition](https://gist.github.com/HimDek/6edde284203a620745fad3f762be603b). Expect a Windows reboot after changing Hyper-V features.
 
-Logs are written to `%LocalAppData%\WSL2Compactor\Logs`. Administrator privileges are required.
+Logs are written to `%LocalAppData%\WSL2Compactor\Logs`.
+
+Administrator privileges are required for Windows-side VHDX compaction.
 
 ## Download
 
-Download `WSL2Compactor-win-x64.exe` from the [latest GitHub Release](https://github.com/rnlcrosoft/WSL2Compactor/releases/latest), open Windows Terminal or PowerShell, and run it.
-
-The executable requests administrator privileges automatically. .NET Runtime installation is not required.
+Download `WSL2Compactor-win-x64.exe` from the [latest GitHub Release](https://github.com/rnlcrosoft/WSL2Compactor/releases/latest) and run it.
 
 The `.sha256` file is optional and can be used to verify the downloaded executable.
 
