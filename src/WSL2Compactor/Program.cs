@@ -1,13 +1,13 @@
-namespace WslAutoCompact;
+namespace WSL2Compactor;
 
 using System.Security.Principal;
 using Spectre.Console;
-using WslAutoCompact.Models;
-using WslAutoCompact.Services;
+using WSL2Compactor.Models;
+using WSL2Compactor.Services;
 
 static class Program
 {
-    private const string AppName = "WSL Auto Compact";
+    private const string AppName = "WSL2Compactor";
 
     static async Task<int> Main()
     {
@@ -15,12 +15,12 @@ static class Program
 
         var logDirectory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "WSL Auto Compact",
+            "WSL2Compactor",
             "Logs");
         Directory.CreateDirectory(logDirectory);
-        var logFile = Path.Combine(logDirectory, $"wsl-auto-compact-{DateTime.Now:yyyyMMdd-HHmmss}.log");
+        var logFile = Path.Combine(logDirectory, $"wsl2compactor-{DateTime.Now:yyyyMMdd-HHmmss}.log");
 
-        var log = new ConsoleFileProgress(logFile);
+        var log = new FileLog(logFile);
         var processRunner = new ProcessRunner();
         var distributionService = new WslDistributionService(processRunner);
         var virtDiskBackend = new VirtDiskCompactBackend();
@@ -31,22 +31,25 @@ static class Program
         try
         {
             PrintHeader();
-            log.Report($"Log file: {logFile}");
+            log.Write($"Log file: {logFile}");
 
             if (!IsRunningAsAdministrator())
             {
-                log.Report("Warning: This process is not elevated. Published builds request administrator privileges automatically.");
-                if (!AnsiConsole.Confirm("Continue anyway?", defaultValue: false))
+                log.Write("Warning: This process is not elevated. Published builds request administrator privileges automatically.");
+                AnsiConsole.MarkupLine("[yellow]Warning:[/] This process is not elevated.");
+                if (!AnsiConsole.Confirm("Continue anyway?", defaultValue: true))
                 {
                     return 1;
                 }
             }
 
-            log.Report("Scanning WSL2 distros...");
+            log.Write("Scanning WSL2 distros...");
+            AnsiConsole.MarkupLine("[grey]Scanning WSL2 distros...[/]");
             var distributions = await distributionService.GetDistributionsAsync(CancellationToken.None).ConfigureAwait(false);
             if (distributions.Count == 0)
             {
-                log.Report("No WSL2 ext4.vhdx files were found.");
+                log.Write("No WSL2 ext4.vhdx files were found.");
+                AnsiConsole.MarkupLine("[yellow]No WSL2 ext4.vhdx files were found.[/]");
                 return 0;
             }
 
@@ -54,44 +57,48 @@ static class Program
             var selected = PromptForDistributions(distributions);
             if (selected.Count == 0)
             {
-                log.Report("No distros selected.");
+                log.Write("No distros selected.");
                 return 0;
             }
 
             var backendMode = await PromptForBackendAsync(optimizeVhdBackend).ConfigureAwait(false);
 
             AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[yellow]This will run wsl --shutdown before compacting.[/]");
-            if (!AnsiConsole.Confirm("Continue?", defaultValue: false))
+            if (!AnsiConsole.Confirm("Run wsl --shutdown and compact selected distros?", defaultValue: true))
             {
-                log.Report("Canceled.");
+                log.Write("Canceled.");
                 return 0;
             }
 
+            var startedAt = DateTimeOffset.Now;
             var rows = selected.Select(distribution => new DistributionRow(distribution)).ToList();
-            await orchestrator.RunAsync(rows, backendMode, log, CancellationToken.None).ConfigureAwait(false);
+            await RunWithProgressAsync(orchestrator, rows, backendMode, logFile, CancellationToken.None).ConfigureAwait(false);
+            var endedAt = DateTimeOffset.Now;
 
-            PrintSummary(rows, log);
+            PrintSummary(rows, startedAt, endedAt, logFile, log);
             AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine($"Log saved to: [grey]{Markup.Escape(logFile)}[/]");
+            AnsiConsole.MarkupLine("[green]Complete.[/] You can close this terminal window when ready. Press Ctrl+C to exit this process.");
+            await Task.Delay(Timeout.InfiniteTimeSpan).ConfigureAwait(false);
             return 0;
         }
         catch (OperationCanceledException)
         {
-            log.Report("Canceled.");
+            log.Write("Canceled.");
             return 130;
         }
         catch (Exception ex)
         {
-            log.Report($"Error: {ex.Message}");
-            log.Report($"Log saved to: {logFile}");
+            log.Write($"Error: {ex.Message}");
+            log.Write($"Log saved to: {logFile}");
+            AnsiConsole.MarkupLine($"[red]Error:[/] {Markup.Escape(ex.Message)}");
+            AnsiConsole.MarkupLine($"Log saved to: [grey]{Markup.Escape(logFile)}[/]");
             return 1;
         }
     }
 
     private static void PrintHeader()
     {
-        AnsiConsole.Write(new FigletText("WSL Auto Compact").LeftJustified().Color(Color.Teal));
+        AnsiConsole.Write(new FigletText("WSL2Compactor").LeftJustified().Color(Color.Teal));
         AnsiConsole.MarkupLine("[grey]Interactive CLI for compacting WSL2 ext4.vhdx files.[/]");
         AnsiConsole.WriteLine();
     }
@@ -168,12 +175,47 @@ static class Program
         return choice.Mode;
     }
 
-    private static void PrintSummary(IReadOnlyList<DistributionRow> rows, ConsoleFileProgress log)
+    private static Task RunWithProgressAsync(
+        CompactOrchestrator orchestrator,
+        IReadOnlyList<DistributionRow> rows,
+        BackendMode backendMode,
+        string logFile,
+        CancellationToken cancellationToken)
+    {
+        return AnsiConsole.Progress()
+            .AutoClear(false)
+            .Columns(
+            [
+                new TaskDescriptionColumn(),
+                new ProgressBarColumn(),
+                new PercentageColumn(),
+                new ElapsedTimeColumn(),
+                new RemainingTimeColumn(),
+                new SpinnerColumn()
+            ])
+            .StartAsync(async context =>
+            {
+                var progress = new SpectreProgressSink(logFile, context);
+                await orchestrator.RunAsync(rows, backendMode, progress, cancellationToken).ConfigureAwait(false);
+            });
+    }
+
+    private static void PrintSummary(
+        IReadOnlyList<DistributionRow> rows,
+        DateTimeOffset startedAt,
+        DateTimeOffset endedAt,
+        string logFile,
+        FileLog log)
     {
         AnsiConsole.WriteLine();
         var table = new Table()
             .Title("Summary")
             .AddColumn("Distro")
+            .AddColumn("Started")
+            .AddColumn("Ended")
+            .AddColumn("Elapsed")
+            .AddColumn("Before")
+            .AddColumn("After")
             .AddColumn(new TableColumn("Bytes saved").RightAligned())
             .AddColumn("Saved")
             .AddColumn("Backend");
@@ -184,13 +226,19 @@ static class Program
             var message = $"Successfully compressed {row.Name}: {savedBytes:N0} bytes saved ({SizeFormatter.Format(savedBytes)}).";
             table.AddRow(
                 Markup.Escape(row.Name),
+                startedAt.ToString("yyyy-MM-dd HH:mm:ss zzz"),
+                endedAt.ToString("yyyy-MM-dd HH:mm:ss zzz"),
+                FormatDuration(endedAt - startedAt),
+                SizeFormatter.Format(row.BeforeBytes),
+                row.AfterBytes is null ? "-" : SizeFormatter.Format(row.AfterBytes.Value),
                 savedBytes.ToString("N0"),
                 SizeFormatter.Format(savedBytes),
                 Markup.Escape(row.Backend));
-            log.WriteFileLine(message);
+            log.Write(message);
         }
 
         AnsiConsole.Write(table);
+        AnsiConsole.MarkupLine($"Log saved to: [grey]{Markup.Escape(logFile)}[/]");
     }
 
     private static bool IsRunningAsAdministrator()
@@ -204,32 +252,84 @@ static class Program
 
     private sealed record BackendChoice(string Label, BackendMode Mode);
 
-    private sealed class ConsoleFileProgress : IProgress<string>
+    private sealed class SpectreProgressSink : IProgress<CompactProgressUpdate>
+    {
+        private readonly string _logFile;
+        private readonly ProgressContext _context;
+        private readonly object _gate = new();
+        private ProgressTask? _task;
+
+        public SpectreProgressSink(string logFile, ProgressContext context)
+        {
+            _logFile = logFile;
+            _context = context;
+        }
+
+        public void Report(CompactProgressUpdate value)
+        {
+            lock (_gate)
+            {
+                var line = $"[{DateTime.Now:HH:mm:ss}] {BuildDescription(value, plainText: true)}";
+                File.AppendAllText(_logFile, line + Environment.NewLine);
+
+                _task ??= _context.AddTask("Starting", new ProgressTaskSettings { MaxValue = 100, AutoStart = true });
+                _task.Description(BuildDescription(value, plainText: false));
+
+                if (value.Percent is { } percent)
+                {
+                    _task.IsIndeterminate(false);
+                    _task.MaxValue(100);
+                    _task.Value(Math.Clamp(percent, 0, 100));
+                }
+                else
+                {
+                    _task.IsIndeterminate(true);
+                }
+            }
+        }
+
+        private static string BuildDescription(CompactProgressUpdate value, bool plainText)
+        {
+            var parts = new[]
+            {
+                value.Distro,
+                value.Backend,
+                value.Phase,
+                value.Message
+            }.Where(part => !string.IsNullOrWhiteSpace(part));
+
+            var description = string.Join(" - ", parts);
+            return plainText ? description : Markup.Escape(description);
+        }
+    }
+
+    private sealed class FileLog
     {
         private readonly string _logFile;
         private readonly object _gate = new();
 
-        public ConsoleFileProgress(string logFile)
+        public FileLog(string logFile)
         {
             _logFile = logFile;
         }
 
-        public void Report(string value)
+        public void Write(string value)
         {
             lock (_gate)
             {
                 var line = $"[{DateTime.Now:HH:mm:ss}] {value}";
-                AnsiConsole.MarkupLine(Markup.Escape(line));
                 File.AppendAllText(_logFile, line + Environment.NewLine);
             }
         }
+    }
 
-        public void WriteFileLine(string value)
+    private static string FormatDuration(TimeSpan duration)
+    {
+        if (duration.TotalHours >= 1)
         {
-            lock (_gate)
-            {
-                File.AppendAllText(_logFile, value + Environment.NewLine);
-            }
+            return duration.ToString(@"h\:mm\:ss");
         }
+
+        return duration.ToString(@"m\:ss");
     }
 }

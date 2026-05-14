@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace WslAutoCompact.Services;
+namespace WSL2Compactor.Services;
 
 internal sealed class FormatPromptGuard : IDisposable
 {

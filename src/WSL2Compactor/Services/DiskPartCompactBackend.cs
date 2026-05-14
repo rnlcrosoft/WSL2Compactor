@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace WslAutoCompact.Services;
+namespace WSL2Compactor.Services;
 
 internal sealed class DiskPartCompactBackend : ICompactBackend
 {
@@ -13,9 +13,9 @@ internal sealed class DiskPartCompactBackend : ICompactBackend
 
     public string Name => "DiskPart";
 
-    public async Task CompactAsync(string vhdPath, IProgress<string> log, CancellationToken cancellationToken)
+    public async Task CompactAsync(string vhdPath, IProgress<CompactProgressUpdate> progress, CancellationToken cancellationToken)
     {
-        var scriptPath = Path.Combine(Path.GetTempPath(), $"wsl-auto-compact-{Guid.NewGuid():N}.txt");
+        var scriptPath = Path.Combine(Path.GetTempPath(), $"wsl2compactor-{Guid.NewGuid():N}.txt");
         var script = string.Join(Environment.NewLine, [
             $"select vdisk file=\"{vhdPath}\"",
             "attach vdisk readonly",
@@ -30,14 +30,16 @@ internal sealed class DiskPartCompactBackend : ICompactBackend
 
         try
         {
-            log.Report($"diskpart script: {scriptPath}");
-            var result = await _processRunner.RunAsync("diskpart.exe", ["/s", scriptPath], log, cancellationToken)
+            progress.Report(CompactProgressUpdate.Indeterminate("DiskPart", $"script: {scriptPath}", backend: Name));
+            var result = await _processRunner.RunAsync("diskpart.exe", ["/s", scriptPath], new StringProgress(progress), cancellationToken)
                 .ConfigureAwait(false);
 
             if (!result.Succeeded)
             {
                 throw new InvalidOperationException($"diskpart compact vdisk failed with exit code {result.ExitCode}.");
             }
+
+            progress.Report(CompactProgressUpdate.Complete("DiskPart", "completed", backend: Name));
         }
         finally
         {
@@ -50,5 +52,18 @@ internal sealed class DiskPartCompactBackend : ICompactBackend
                 // Temporary cleanup failure should not hide the compact result.
             }
         }
+    }
+
+    private sealed class StringProgress : IProgress<string>
+    {
+        private readonly IProgress<CompactProgressUpdate> _progress;
+
+        public StringProgress(IProgress<CompactProgressUpdate> progress)
+        {
+            _progress = progress;
+        }
+
+        public void Report(string value)
+            => _progress.Report(CompactProgressUpdate.Indeterminate("DiskPart", value, backend: "DiskPart"));
     }
 }

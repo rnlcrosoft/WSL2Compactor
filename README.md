@@ -1,28 +1,27 @@
-# WSL Auto Compact
+# WSL2Compactor
 
-WSL Auto Compact is an interactive Windows terminal app for compacting WSL2 `ext4.vhdx` files.
+WSL2Compactor is an interactive Windows terminal app for compacting WSL2 `ext4.vhdx` files.
 
-It scans your WSL2 distros, lets you choose targets with terminal prompts, runs `fstrim`, shuts WSL down, compacts the selected VHDX files, and prints the bytes saved.
+It scans detected WSL2 distros, lets you choose targets with terminal prompts, runs `fstrim`, shuts WSL down, compacts the selected VHDX files, and prints the bytes saved.
 
 ## Features
 
 - Detects WSL2 distributions from `HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss`.
-- Targets only existing `ext4.vhdx` files.
-- Runs as an interactive terminal workflow with selection and confirmation prompts.
-- Runs `wsl.exe -d <distro> --user root fstrim -av` before compacting.
-- Runs `wsl.exe --shutdown` before touching the VHDX.
+- Compacts detected WSL2 `ext4.vhdx` files without touching Linux files directly.
+- Shows progress, elapsed time, estimated remaining time, start time, and end time.
 - Uses `virtdisk.dll` / `CompactVirtualDisk` as the default backend.
 - Falls back to `diskpart compact vdisk` when the VirtDisk API fails.
 - Offers `Optimize-VHD` only when it is already available.
-- Monitors and closes Windows format prompts during compact operations.
-- Saves logs to `%LocalAppData%\WSL Auto Compact\Logs`.
+- Saves logs to `%LocalAppData%\WSL2Compactor\Logs`.
 - Requires administrator privileges.
 
-## Safety notes
+## Download
 
-Running this app stops WSL. Tools that depend on WSL, such as Docker Desktop, VS Code Remote, and open WSL terminals, may be interrupted.
+Download `WSL2Compactor-win-x64.exe` from the [latest GitHub Release](https://github.com/rnlcrosoft/WSL2Compactor/releases/latest), open Windows Terminal or PowerShell, and run it.
 
-During compact operations, the app watches for Windows format prompts and closes them automatically.
+The executable requests administrator privileges automatically. .NET Runtime installation is not required.
+
+The `.sha256` file is optional and can be used to verify the downloaded executable.
 
 ## Build
 
@@ -34,7 +33,7 @@ Requirements:
 From the repository root:
 
 ```bash
-dotnet publish src/WslAutoCompact/WslAutoCompact.csproj \
+dotnet publish src/WSL2Compactor/WSL2Compactor.csproj \
   -c Release \
   -r win-x64 \
   --self-contained true \
@@ -42,12 +41,6 @@ dotnet publish src/WslAutoCompact/WslAutoCompact.csproj \
   -p:EnableCompressionInSingleFile=true \
   -p:PublishTrimmed=false \
   -p:PublishReadyToRun=false
-```
-
-The executable is created under:
-
-```text
-src/WslAutoCompact/bin/Release/net10.0-windows/win-x64/publish/
 ```
 
 You can also run:
@@ -61,56 +54,6 @@ or, from PowerShell:
 ```powershell
 .\scripts\publish-win-x64.ps1
 ```
-
-## Download
-
-Download `WslAutoCompact-win-x64.exe` from the [latest GitHub Release](https://github.com/rnlcrosoft/WSLAutoCompact/releases/latest), open Windows Terminal or PowerShell, and run it.
-
-Run it from an elevated terminal for the cleanest experience. The executable also requests administrator privileges automatically. .NET Runtime installation is not required. If Windows SmartScreen appears, choose to run the app only if you trust this repository and release.
-
-The `.sha256` file is optional and can be used to verify the downloaded executable.
-
-## Publishing a GitHub Release
-
-Releases are automated by `.github/workflows/release.yml`. Maintainers can publish a new release by pushing a version tag.
-
-After committing and pushing the release commit, create and push a version tag:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-The workflow publishes these assets:
-
-```text
-WslAutoCompact-win-x64.exe
-WslAutoCompact-win-x64.exe.sha256
-```
-
-You can also run the `Release` workflow manually from GitHub Actions and provide an existing tag, such as `v0.1.0`.
-
-Manual local fallback with GitHub CLI:
-
-```bash
-./scripts/publish-win-x64.sh
-mkdir -p artifacts/release
-cp src/WslAutoCompact/bin/Release/net10.0-windows/win-x64/publish/WslAutoCompact.exe artifacts/release/WslAutoCompact-win-x64.exe
-(cd artifacts/release && sha256sum WslAutoCompact-win-x64.exe > WslAutoCompact-win-x64.exe.sha256)
-
-gh release create v0.1.0 \
-  artifacts/release/WslAutoCompact-win-x64.exe \
-  artifacts/release/WslAutoCompact-win-x64.exe.sha256 \
-  --verify-tag \
-  --title "WSL Auto Compact v0.1.0" \
-  --generate-notes
-```
-
-## Development
-
-The publish output embeds an application manifest with `requireAdministrator`, so the released `.exe` requests elevation automatically.
-
-During development, running the app without elevation may detect distros but compact operations can fail.
 
 ## License
 

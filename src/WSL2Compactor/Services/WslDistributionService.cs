@@ -1,8 +1,8 @@
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
-using WslAutoCompact.Models;
+using WSL2Compactor.Models;
 
-namespace WslAutoCompact.Services;
+namespace WSL2Compactor.Services;
 
 internal sealed partial class WslDistributionService
 {

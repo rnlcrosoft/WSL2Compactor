@@ -21,10 +21,10 @@ jobs:
 
     env:
       DOTNET_VERSION: "10.0.x"
-      PROJECT_PATH: src/WslAutoCompact/WslAutoCompact.csproj
+      PROJECT_PATH: src/WSL2Compactor/WSL2Compactor.csproj
       PUBLISH_DIR: artifacts/publish
       RELEASE_DIR: artifacts/release
-      ASSET_NAME: WslAutoCompact-win-x64.exe
+      ASSET_NAME: WSL2Compactor-win-x64.exe
 
     steps:
       - name: Resolve release tag
@@ -60,11 +60,11 @@ jobs:
 
       - name: Build
         shell: pwsh
-        run: dotnet build WslAutoCompact.slnx -c Release
+        run: dotnet build WSL2Compactor.slnx -c Release
 
       - name: Verify formatting
         shell: pwsh
-        run: dotnet format WslAutoCompact.slnx --verify-no-changes
+        run: dotnet format WSL2Compactor.slnx --verify-no-changes
 
       - name: Publish win-x64
         shell: pwsh
@@ -85,7 +85,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path $env:RELEASE_DIR -Force | Out-Null
 
-          $publishedExe = Join-Path $env:PUBLISH_DIR "WslAutoCompact.exe"
+          $publishedExe = Join-Path $env:PUBLISH_DIR "WSL2Compactor.exe"
           $releaseExe = Join-Path $env:RELEASE_DIR $env:ASSET_NAME
           Copy-Item $publishedExe $releaseExe -Force
 
@@ -109,25 +109,24 @@ jobs:
           $releaseNotes = @'
           ## Download
 
-          Download `WslAutoCompact-win-x64.exe`, open Windows Terminal or PowerShell, and run it.
-
-          Run it from an elevated terminal for the cleanest experience. The app also requests administrator privileges automatically. .NET Runtime installation is not required.
+          Download `WSL2Compactor-win-x64.exe`, open Windows Terminal or PowerShell, and run it. The app requests administrator privileges automatically. .NET Runtime installation is not required.
 
           ## Files
 
-          - `WslAutoCompact-win-x64.exe`: self-contained Windows x64 executable.
-          - `WslAutoCompact-win-x64.exe.sha256`: SHA256 checksum for the executable.
-
-          ## Before running
-
-          Running compact stops WSL. Docker Desktop, VS Code Remote, and open WSL terminals may be interrupted.
+          - `WSL2Compactor-win-x64.exe`: self-contained Windows x64 executable.
+          - `WSL2Compactor-win-x64.exe.sha256`: SHA256 checksum for the executable.
           '@
+
+          gh release view $tag --repo "${{ github.repository }}" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete $tag --repo "${{ github.repository }}" --yes
+          }
 
           gh release create $tag `
             $releaseExe `
             $checksum `
             --repo "${{ github.repository }}" `
             --verify-tag `
-            --title "WSL Auto Compact $tag" `
+            --title "WSL2Compactor $tag" `
             --notes $releaseNotes `
             --generate-notes

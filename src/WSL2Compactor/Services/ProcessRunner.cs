@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 
-namespace WslAutoCompact.Services;
+namespace WSL2Compactor.Services;
 
 internal sealed class ProcessRunner
 {

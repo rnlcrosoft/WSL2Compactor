@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -7,10 +7,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <AssemblyName>WslAutoCompact</AssemblyName>
-    <RootNamespace>WslAutoCompact</RootNamespace>
+    <AssemblyName>WSL2Compactor</AssemblyName>
+    <RootNamespace>WSL2Compactor</RootNamespace>
     <Version>0.1.0</Version>
-    <Authors>WSL Auto Compact contributors</Authors>
+    <Authors>WSL2Compactor contributors</Authors>
     <Description>Interactive CLI for compacting WSL2 ext4.vhdx files.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>

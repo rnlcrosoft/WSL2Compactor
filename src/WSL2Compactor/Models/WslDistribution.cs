@@ -1,4 +1,4 @@
-namespace WslAutoCompact.Models;
+namespace WSL2Compactor.Models;
 
 internal sealed record WslDistribution(
     string Name,

@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace WslAutoCompact.Models;
+namespace WSL2Compactor.Models;
 
 internal sealed class DistributionRow : INotifyPropertyChanged
 {

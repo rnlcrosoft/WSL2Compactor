@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-dotnet publish src/WslAutoCompact/WslAutoCompact.csproj \
+dotnet publish src/WSL2Compactor/WSL2Compactor.csproj \
   -c Release \
   -r win-x64 \
   --self-contained true \
