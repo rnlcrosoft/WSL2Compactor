@@ -2,13 +2,13 @@
 
 WSL Auto Compact is an interactive Windows terminal app for compacting WSL2 `ext4.vhdx` files.
 
-It scans your WSL2 distros, lets you choose targets with an arrow-key menu, runs `fstrim`, shuts WSL down, compacts the selected VHDX files, and prints the bytes saved.
+It scans your WSL2 distros, lets you choose targets with terminal prompts, runs `fstrim`, shuts WSL down, compacts the selected VHDX files, and prints the bytes saved.
 
 ## Features
 
 - Detects WSL2 distributions from `HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss`.
 - Targets only existing `ext4.vhdx` files.
-- Runs as an interactive terminal workflow with arrow-key menus and confirmation prompts.
+- Runs as an interactive terminal workflow with selection and confirmation prompts.
 - Runs `wsl.exe -d <distro> --user root fstrim -av` before compacting.
 - Runs `wsl.exe --shutdown` before touching the VHDX.
 - Uses `virtdisk.dll` / `CompactVirtualDisk` as the default backend.
