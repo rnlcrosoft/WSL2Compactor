@@ -1,0 +1,253 @@
+namespace WSL2Compactor;
+
+using Spectre.Console;
+using Spectre.Console.Rendering;
+using WSL2Compactor.Models;
+using WSL2Compactor.Services;
+
+internal sealed class TerminalRunDisplay : IProgress<CompactProgressUpdate>
+{
+    private static readonly string[] SpinnerFrames = ["-", "\\", "|", "/"];
+    private readonly object _gate = new();
+    private readonly RunLogger _log;
+    private readonly IReadOnlyList<DistributionRow> _rows;
+    private CompactProgressUpdate? _current;
+    private DateTimeOffset _phaseStartedAt;
+    private string _phaseKey = "";
+    private int _spinnerIndex;
+    private DateTimeOffset _startedAt;
+
+    public TerminalRunDisplay(IReadOnlyList<DistributionRow> rows, RunLogger log)
+    {
+        _rows = rows;
+        _log = log;
+        _startedAt = DateTimeOffset.Now;
+        _phaseStartedAt = _startedAt;
+    }
+
+    public void Report(CompactProgressUpdate value)
+    {
+        var runEvent = RunEvent.FromUpdate(value);
+        _log.Write(runEvent);
+
+        lock (_gate)
+        {
+            var phaseKey = $"{value.Distro}|{value.Backend}|{value.Phase}";
+            if (!string.Equals(_phaseKey, phaseKey, StringComparison.Ordinal))
+            {
+                _phaseKey = phaseKey;
+                _phaseStartedAt = runEvent.Timestamp;
+            }
+
+            _current = value;
+        }
+    }
+
+    public async Task RunAsync(
+        Func<IProgress<CompactProgressUpdate>, CancellationToken, Task> action,
+        CancellationToken cancellationToken)
+    {
+        _startedAt = DateTimeOffset.Now;
+        _phaseStartedAt = _startedAt;
+
+        await AnsiConsole.Live(BuildRenderable())
+            .AutoClear(false)
+            .Overflow(VerticalOverflow.Ellipsis)
+            .Cropping(VerticalOverflowCropping.Top)
+            .StartAsync(async context =>
+            {
+                var work = Task.Run(() => action(this, cancellationToken), CancellationToken.None);
+                using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(250));
+
+                while (!work.IsCompleted)
+                {
+                    context.UpdateTarget(BuildRenderable());
+                    context.Refresh();
+
+                    try
+                    {
+                        await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+                }
+
+                await work.ConfigureAwait(false);
+                context.UpdateTarget(BuildRenderable());
+                context.Refresh();
+            }).ConfigureAwait(false);
+    }
+
+    private IRenderable BuildRenderable()
+        => new Rows(
+        [
+            BuildCurrentPanel(),
+            BuildDistroTable(),
+            BuildTranscriptPanel()
+        ]);
+
+    private Panel BuildCurrentPanel()
+    {
+        CompactProgressUpdate? current;
+        DateTimeOffset phaseStartedAt;
+        DateTimeOffset startedAt;
+        int spinnerIndex;
+
+        lock (_gate)
+        {
+            current = _current;
+            phaseStartedAt = _phaseStartedAt;
+            startedAt = _startedAt;
+            spinnerIndex = _spinnerIndex++;
+        }
+
+        var now = DateTimeOffset.Now;
+        var table = new Table().Expand();
+        table.AddColumn("Field");
+        table.AddColumn("Value");
+
+        table.AddRow("Distro", Markup.Escape(current?.Distro ?? "-"));
+        table.AddRow("Backend", Markup.Escape(current?.Backend ?? "-"));
+        table.AddRow("Phase", Markup.Escape(current?.Phase ?? "starting"));
+        table.AddRow("Message", Markup.Escape(Trim(current?.Message ?? "Waiting for work to start.", 120)));
+        table.AddRow("Progress", Markup.Escape(BuildProgressText(current, spinnerIndex)));
+        table.AddRow("Elapsed", Markup.Escape(FormatDuration(now - startedAt)));
+        table.AddRow("Phase elapsed", Markup.Escape(FormatDuration(now - phaseStartedAt)));
+        table.AddRow("ETA", Markup.Escape(EstimateEta(current, now - phaseStartedAt)));
+        table.AddRow("Started", Markup.Escape(startedAt.ToString("yyyy-MM-dd HH:mm:ss zzz")));
+
+        return new Panel(table)
+            .Header("Current operation")
+            .Expand();
+    }
+
+    private Table BuildDistroTable()
+    {
+        var table = new Table()
+            .Title("Selected distros")
+            .AddColumn("Distro")
+            .AddColumn("Status")
+            .AddColumn("Before")
+            .AddColumn("After")
+            .AddColumn("Saved")
+            .AddColumn("Backend");
+
+        foreach (var row in _rows)
+        {
+            table.AddRow(
+                Markup.Escape(row.Name),
+                Markup.Escape(row.Status),
+                Markup.Escape(row.BeforeText),
+                Markup.Escape(row.AfterText),
+                Markup.Escape(row.SavedText),
+                Markup.Escape(string.IsNullOrWhiteSpace(row.Backend) ? "-" : row.Backend));
+        }
+
+        return table;
+    }
+
+    private Panel BuildTranscriptPanel()
+    {
+        var events = _log.SnapshotEvents(22).Select(RenderEvent).ToList<IRenderable>();
+        if (events.Count == 0)
+        {
+            events.Add(new Markup("[grey]No events yet.[/]"));
+        }
+
+        return new Panel(new Rows(events))
+            .Header("Transcript")
+            .Expand();
+    }
+
+    private static Markup RenderEvent(RunEvent runEvent)
+    {
+        var level = runEvent.Level switch
+        {
+            CompactEventLevel.Warning => "[yellow]WARN[/]",
+            CompactEventLevel.Error => "[red]ERROR[/]",
+            CompactEventLevel.Debug => "[grey]DEBUG[/]",
+            _ => "[green]INFO[/]"
+        };
+        var scope = string.Join(" / ", new[] { runEvent.Distro, runEvent.Backend, runEvent.Phase }
+            .Where(value => !string.IsNullOrWhiteSpace(value)));
+        var text = $"{runEvent.Timestamp:HH:mm:ss} {level} ";
+        if (!string.IsNullOrWhiteSpace(scope))
+        {
+            text += $"[grey]{Markup.Escape(scope)}[/] ";
+        }
+
+        if (runEvent.Kind == CompactEventKind.Command && !string.IsNullOrWhiteSpace(runEvent.Command))
+        {
+            text += $"[blue]$[/] {Markup.Escape(Trim(runEvent.Command, 160))}";
+        }
+        else
+        {
+            text += Markup.Escape(Trim(runEvent.Message, 180));
+        }
+
+        if (runEvent.Percent is { } percent)
+        {
+            text += $" [grey]({percent:0.#}%)[/]";
+        }
+
+        return new Markup(text);
+    }
+
+    private static string BuildProgressText(CompactProgressUpdate? current, int spinnerIndex)
+    {
+        if (current?.Percent is not { } percent)
+        {
+            return $"{SpinnerFrames[spinnerIndex % SpinnerFrames.Length]} running";
+        }
+
+        var displayPercent = current.IsComplete ? 100 : Math.Min(percent, 99);
+        var width = 34;
+        var filled = (int)Math.Round(width * displayPercent / 100, MidpointRounding.AwayFromZero);
+        filled = Math.Clamp(filled, 0, width);
+        return $"[{new string('#', filled)}{new string('-', width - filled)}] {displayPercent,5:0.0}%";
+    }
+
+    private static string EstimateEta(CompactProgressUpdate? current, TimeSpan phaseElapsed)
+    {
+        if (current?.Percent is not { } percent || percent <= 0)
+        {
+            return "-";
+        }
+
+        if (!current.IsComplete && percent >= 99)
+        {
+            return "finalizing";
+        }
+
+        if (current.IsComplete || percent >= 100)
+        {
+            return "0:00";
+        }
+
+        var seconds = phaseElapsed.TotalSeconds * ((100 - percent) / percent);
+        if (double.IsNaN(seconds) || double.IsInfinity(seconds) || seconds < 0)
+        {
+            return "-";
+        }
+
+        return FormatDuration(TimeSpan.FromSeconds(seconds));
+    }
+
+    private static string FormatDuration(TimeSpan duration)
+    {
+        if (duration.TotalHours >= 1)
+        {
+            return duration.ToString(@"h\:mm\:ss");
+        }
+
+        return duration.ToString(@"m\:ss");
+    }
+
+    private static string Trim(string value, int maxLength)
+    {
+        var normalized = value.Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal).Trim();
+        return normalized.Length <= maxLength ? normalized : normalized[..Math.Max(0, maxLength - 3)] + "...";
+    }
+}

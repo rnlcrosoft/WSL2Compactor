@@ -33,7 +33,7 @@ internal sealed class CompactOrchestrator
         IProgress<CompactProgressUpdate> progress,
         CancellationToken cancellationToken)
     {
-        using var formatPromptGuard = new FormatPromptGuard(new StringProgress(progress));
+        using var formatPromptGuard = new FormatPromptGuard(new ProcessProgressAdapter(progress, "format guard"));
 
         foreach (var row in rows)
         {
@@ -44,12 +44,12 @@ internal sealed class CompactOrchestrator
             var trimResult = await _processRunner.RunAsync(
                 "wsl.exe",
                 ["-d", row.Name, "--user", "root", "fstrim", "-av"],
-                new StringProgress(progress, row.Name, "fstrim"),
+                new ProcessProgressAdapter(progress, "fstrim", row.Name),
                 cancellationToken).ConfigureAwait(true);
 
             if (!trimResult.Succeeded)
             {
-                progress.Report(CompactProgressUpdate.Indeterminate("fstrim", $"Warning: fstrim failed for {row.Name}. Compact will continue.", row.Name));
+                progress.Report(CompactProgressUpdate.Warning("fstrim", $"fstrim failed for {row.Name}. Compact will continue.", row.Name));
             }
         }
 
@@ -60,12 +60,12 @@ internal sealed class CompactOrchestrator
             row.Status = "Stopping WSL";
         }
 
-        var shutdownResult = await _processRunner.RunAsync("wsl.exe", ["--shutdown"], new StringProgress(progress, phase: "shutdown"), cancellationToken)
+        var shutdownResult = await _processRunner.RunAsync("wsl.exe", ["--shutdown"], new ProcessProgressAdapter(progress, "shutdown"), cancellationToken)
             .ConfigureAwait(true);
 
         if (!shutdownResult.Succeeded)
         {
-            progress.Report(CompactProgressUpdate.Indeterminate("shutdown", "Warning: wsl --shutdown exited with a non-zero code. Checking whether VHDX locks were released."));
+            progress.Report(CompactProgressUpdate.Warning("shutdown", "wsl --shutdown exited with a non-zero code. Checking whether VHDX locks were released."));
         }
 
         foreach (var row in rows)
@@ -76,7 +76,7 @@ internal sealed class CompactOrchestrator
             row.Status = "Running compact";
             row.Backend = backendMode == BackendMode.OptimizeVhd ? _optimizeVhdBackend.Name : _virtDiskBackend.Name;
 
-            progress.Report(CompactProgressUpdate.Indeterminate("compact", $"Before: {SizeFormatter.Format(row.BeforeBytes)}", row.Name, row.Backend));
+            progress.Report(CompactProgressUpdate.Size("compact", $"Before: {SizeFormatter.Format(row.BeforeBytes)}", beforeBytes: row.BeforeBytes, distro: row.Name, backend: row.Backend));
 
             try
             {
@@ -91,7 +91,7 @@ internal sealed class CompactOrchestrator
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                progress.Report(CompactProgressUpdate.Indeterminate("fallback", $"Warning: {row.Backend} failed: {ex.Message}", row.Name, row.Backend));
+                progress.Report(CompactProgressUpdate.Warning("fallback", $"{row.Backend} failed: {ex.Message}", row.Name, row.Backend));
                 progress.Report(CompactProgressUpdate.Indeterminate("fallback", "Running DiskPart fallback.", row.Name, _diskPartBackend.Name));
                 row.Backend = _diskPartBackend.Name;
                 await _diskPartBackend.CompactAsync(row.VhdPath, new DistroProgress(progress, row.Name, _diskPartBackend.Name), cancellationToken).ConfigureAwait(true);
@@ -99,7 +99,16 @@ internal sealed class CompactOrchestrator
 
             row.AfterBytes = new FileInfo(row.VhdPath).Length;
             row.Status = "Done";
-            progress.Report(CompactProgressUpdate.Complete("complete", $"After: {SizeFormatter.Format(row.AfterBytes.Value)}; saved: {row.SavedText}", row.Name, row.Backend));
+            var savedBytes = Math.Max(0, row.BeforeBytes - row.AfterBytes.Value);
+            progress.Report(CompactProgressUpdate.Size(
+                "complete",
+                $"After: {SizeFormatter.Format(row.AfterBytes.Value)}; saved: {row.SavedText}",
+                beforeBytes: row.BeforeBytes,
+                afterBytes: row.AfterBytes.Value,
+                savedBytes: savedBytes,
+                distro: row.Name,
+                backend: row.Backend));
+            progress.Report(CompactProgressUpdate.Complete("complete", $"Finished {row.Name}.", row.Name, row.Backend));
         }
     }
 
@@ -130,23 +139,6 @@ internal sealed class CompactOrchestrator
                 await Task.Delay(1000, cancellationToken).ConfigureAwait(true);
             }
         }
-    }
-
-    private sealed class StringProgress : IProgress<string>
-    {
-        private readonly IProgress<CompactProgressUpdate> _progress;
-        private readonly string? _distro;
-        private readonly string _phase;
-
-        public StringProgress(IProgress<CompactProgressUpdate> progress, string? distro = null, string phase = "process")
-        {
-            _progress = progress;
-            _distro = distro;
-            _phase = phase;
-        }
-
-        public void Report(string value)
-            => _progress.Report(CompactProgressUpdate.Indeterminate(_phase, value, _distro));
     }
 
     private sealed class DistroProgress : IProgress<CompactProgressUpdate>

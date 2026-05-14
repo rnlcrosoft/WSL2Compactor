@@ -71,10 +71,7 @@ internal sealed class ProcessRunner
 
         await Task.Run(process.WaitForExit, CancellationToken.None).ConfigureAwait(false);
 
-        if (process.ExitCode != 0)
-        {
-            log?.Report($"Exit code: {process.ExitCode}");
-        }
+        log?.Report($"Exit code: {process.ExitCode}");
 
         return new ProcessResult(process.ExitCode, stdout.ToString(), stderr.ToString());
     }

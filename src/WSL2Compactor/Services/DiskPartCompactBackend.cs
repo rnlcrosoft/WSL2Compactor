@@ -31,7 +31,7 @@ internal sealed class DiskPartCompactBackend : ICompactBackend
         try
         {
             progress.Report(CompactProgressUpdate.Indeterminate("DiskPart", $"script: {scriptPath}", backend: Name));
-            var result = await _processRunner.RunAsync("diskpart.exe", ["/s", scriptPath], new StringProgress(progress), cancellationToken)
+            var result = await _processRunner.RunAsync("diskpart.exe", ["/s", scriptPath], new ProcessProgressAdapter(progress, "DiskPart", backend: Name), cancellationToken)
                 .ConfigureAwait(false);
 
             if (!result.Succeeded)
@@ -52,18 +52,5 @@ internal sealed class DiskPartCompactBackend : ICompactBackend
                 // Temporary cleanup failure should not hide the compact result.
             }
         }
-    }
-
-    private sealed class StringProgress : IProgress<string>
-    {
-        private readonly IProgress<CompactProgressUpdate> _progress;
-
-        public StringProgress(IProgress<CompactProgressUpdate> progress)
-        {
-            _progress = progress;
-        }
-
-        public void Report(string value)
-            => _progress.Report(CompactProgressUpdate.Indeterminate("DiskPart", value, backend: "DiskPart"));
     }
 }

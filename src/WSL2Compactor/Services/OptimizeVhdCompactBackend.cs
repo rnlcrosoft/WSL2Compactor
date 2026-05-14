@@ -25,7 +25,7 @@ internal sealed class OptimizeVhdCompactBackend : ICompactBackend
         var result = await _processRunner.RunAsync(
             "powershell.exe",
             ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
-            new StringProgress(progress),
+            new ProcessProgressAdapter(progress, "Optimize-VHD", backend: Name),
             cancellationToken).ConfigureAwait(false);
 
         if (!result.Succeeded)
@@ -34,18 +34,5 @@ internal sealed class OptimizeVhdCompactBackend : ICompactBackend
         }
 
         progress.Report(CompactProgressUpdate.Complete("Optimize-VHD", "completed", backend: Name));
-    }
-
-    private sealed class StringProgress : IProgress<string>
-    {
-        private readonly IProgress<CompactProgressUpdate> _progress;
-
-        public StringProgress(IProgress<CompactProgressUpdate> progress)
-        {
-            _progress = progress;
-        }
-
-        public void Report(string value)
-            => _progress.Report(CompactProgressUpdate.Indeterminate("Optimize-VHD", value, backend: "Optimize-VHD"));
     }
 }

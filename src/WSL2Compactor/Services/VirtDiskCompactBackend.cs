@@ -49,8 +49,8 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
             {
                 var detachResult = DetachVirtualDisk(handle, DetachVirtualDiskFlag.None, 0);
                 progress.Report(detachResult == ErrorSuccess
-                    ? CompactProgressUpdate.Complete("VirtDisk", "detach completed", backend: Name)
-                    : CompactProgressUpdate.Indeterminate("VirtDisk", $"detach failed ({FormatWin32Error(detachResult)})", backend: Name));
+                    ? CompactProgressUpdate.Indeterminate("VirtDisk", "detach completed", backend: Name)
+                    : CompactProgressUpdate.Warning("VirtDisk", $"detach failed ({FormatWin32Error(detachResult)})", backend: Name));
             }
         }
     }
@@ -105,9 +105,20 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
 
                 if (virtualDiskProgress.OperationStatus == ErrorIoPending)
                 {
-                    var percent = CalculatePercent(virtualDiskProgress);
-                    maxPercent = Math.Max(maxPercent, percent);
-                    progress.Report(CompactProgressUpdate.Progress("VirtDisk", "CompactVirtualDisk running", maxPercent, backend: "VirtDisk API"));
+                    var calculatedPercent = CalculatePercent(virtualDiskProgress);
+                    var displayPercent = Math.Min(calculatedPercent, 99);
+                    maxPercent = Math.Max(maxPercent, displayPercent);
+                    var message = calculatedPercent >= 100 ? "Finalizing" : "CompactVirtualDisk running";
+                    progress.Report(CompactProgressUpdate.Progress(
+                        "VirtDisk",
+                        message,
+                        maxPercent,
+                        distro: null,
+                        backend: "VirtDisk API",
+                        currentValue: virtualDiskProgress.CurrentValue,
+                        completionValue: virtualDiskProgress.CompletionValue,
+                        operationStatus: virtualDiskProgress.OperationStatus,
+                        calculatedPercent: calculatedPercent));
                     await Task.Delay(500, cancellationToken).ConfigureAwait(false);
                     continue;
                 }
