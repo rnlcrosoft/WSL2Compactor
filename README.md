@@ -2,7 +2,7 @@
 
 WSL Auto Compact is a small Windows GUI app for compacting WSL2 `ext4.vhdx` files.
 
-The app is intentionally simple: it shows the commands and low-level actions in a CLI-style log, runs `fstrim`, shuts WSL down, then compacts the selected VHDX files.
+It shows each step in a CLI-style log, runs `fstrim`, shuts WSL down, then compacts the selected VHDX files.
 
 ## Features
 
