@@ -1,8 +1,8 @@
 # WSL2Compactor
 
-WSL2Compactor is an interactive Windows app for compacting WSL2 `ext4.vhdx` files.
+WSL2Compactor is an interactive Windows console application for compacting WSL2 `ext4.vhdx` files.
 
-It automates the Windows-side compaction flow for WSL2 distributions and shows how much host disk space was actually reclaimed.
+It guides the WSL and Windows compaction steps in order.
 
 ```text
 Deleted files inside WSL do not automatically shrink ext4.vhdx.
