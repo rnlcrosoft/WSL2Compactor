@@ -49,7 +49,6 @@ static class Program
                 return 0;
             }
 
-            PrintDistributions(distributions);
             var selected = PromptForDistributions(distributions);
             if (selected.Count == 0)
             {
@@ -124,76 +123,112 @@ static class Program
 
     private static IReadOnlyList<WslDistribution> PromptForDistributions(IReadOnlyList<WslDistribution> distributions)
     {
-        while (true)
+        PrintDistributions(distributions);
+
+        var options = new List<MenuOption<IReadOnlyList<WslDistribution>>>
         {
-            Console.WriteLine();
-            Console.Write("Select distros to compact [all, numbers like 1,2, or q]: ");
-            var input = (Console.ReadLine() ?? string.Empty).Trim();
+            new("All distros", distributions)
+        };
 
-            if (string.IsNullOrWhiteSpace(input) || input.Equals("all", StringComparison.OrdinalIgnoreCase) || input.Equals("a", StringComparison.OrdinalIgnoreCase))
-            {
-                return distributions;
-            }
+        options.AddRange(distributions.Select(distribution =>
+            new MenuOption<IReadOnlyList<WslDistribution>>(
+                $"{distribution.Name} ({SizeFormatter.Format(distribution.SizeBytes)})",
+                [distribution])));
+        options.Add(new MenuOption<IReadOnlyList<WslDistribution>>("Cancel", []));
 
-            if (input.Equals("q", StringComparison.OrdinalIgnoreCase) || input.Equals("quit", StringComparison.OrdinalIgnoreCase))
-            {
-                return [];
-            }
-
-            var selected = new List<WslDistribution>();
-            var invalid = false;
-            foreach (var part in input.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            {
-                if (!int.TryParse(part, out var number) || number < 1 || number > distributions.Count)
-                {
-                    invalid = true;
-                    break;
-                }
-
-                var distribution = distributions[number - 1];
-                if (!selected.Contains(distribution))
-                {
-                    selected.Add(distribution);
-                }
-            }
-
-            if (!invalid && selected.Count > 0)
-            {
-                return selected;
-            }
-
-            Console.WriteLine("Invalid selection.");
-        }
+        return PromptMenu("Select distros to compact", options, allowCancel: true, cancelValue: []);
     }
 
     private static async Task<BackendMode> PromptForBackendAsync(OptimizeVhdCompactBackend optimizeVhdBackend)
     {
         var optimizeAvailable = await optimizeVhdBackend.IsAvailableAsync(CancellationToken.None).ConfigureAwait(false);
 
-        Console.WriteLine();
-        Console.WriteLine("Backend");
-        Console.WriteLine("-------");
-        Console.WriteLine("[1] VirtDisk API (recommended, fallback: DiskPart)");
+        var options = new List<MenuOption<BackendMode>>
+        {
+            new("VirtDisk API (recommended, fallback: DiskPart)", BackendMode.VirtDisk)
+        };
+
         if (optimizeAvailable)
         {
-            Console.WriteLine("[2] Optimize-VHD (fallback: DiskPart)");
+            options.Add(new MenuOption<BackendMode>("Optimize-VHD (fallback: DiskPart)", BackendMode.OptimizeVhd));
         }
 
-        while (true)
+        return PromptMenu("Choose backend", options, allowCancel: false, cancelValue: BackendMode.VirtDisk);
+    }
+
+    private static T PromptMenu<T>(string title, IReadOnlyList<MenuOption<T>> options, bool allowCancel, T cancelValue)
+    {
+        if (options.Count == 0)
         {
-            Console.Write("Choose backend [1]: ");
-            var input = (Console.ReadLine() ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(input) || input == "1")
-            {
-                return BackendMode.VirtDisk;
-            }
+            throw new ArgumentException("At least one menu option is required.", nameof(options));
+        }
 
-            if (optimizeAvailable && input == "2")
-            {
-                return BackendMode.OptimizeVhd;
-            }
+        Console.WriteLine();
+        Console.WriteLine(title);
+        Console.WriteLine(new string('-', title.Length));
+        Console.WriteLine(allowCancel
+            ? "Use Up/Down arrows to move, Enter to select, Esc or Q to cancel."
+            : "Use Up/Down arrows to move, Enter to select.");
 
-            Console.WriteLine("Invalid backend.");
+        var selectedIndex = 0;
+        var menuTop = Console.CursorTop;
+        var previousCursorVisible = Console.CursorVisible;
+        Console.CursorVisible = false;
+
+        try
+        {
+            while (true)
+            {
+                RenderMenu(options, selectedIndex, menuTop);
+                var key = Console.ReadKey(intercept: true);
+
+                switch (key.Key)
+                {
+                    case ConsoleKey.UpArrow:
+                        selectedIndex = selectedIndex == 0 ? options.Count - 1 : selectedIndex - 1;
+                        break;
+                    case ConsoleKey.DownArrow:
+                        selectedIndex = (selectedIndex + 1) % options.Count;
+                        break;
+                    case ConsoleKey.Home:
+                        selectedIndex = 0;
+                        break;
+                    case ConsoleKey.End:
+                        selectedIndex = options.Count - 1;
+                        break;
+                    case ConsoleKey.Enter:
+                        RenderMenu(options, selectedIndex, menuTop);
+                        Console.SetCursorPosition(0, menuTop + options.Count);
+                        Console.WriteLine();
+                        return options[selectedIndex].Value;
+                    case ConsoleKey.Escape:
+                    case ConsoleKey.Q:
+                        if (allowCancel)
+                        {
+                            RenderMenu(options, selectedIndex, menuTop);
+                            Console.SetCursorPosition(0, menuTop + options.Count);
+                            Console.WriteLine();
+                            return cancelValue;
+                        }
+
+                        break;
+                }
+            }
+        }
+        finally
+        {
+            Console.CursorVisible = previousCursorVisible;
+        }
+    }
+
+    private static void RenderMenu<T>(IReadOnlyList<MenuOption<T>> options, int selectedIndex, int top)
+    {
+        for (var index = 0; index < options.Count; index++)
+        {
+            Console.SetCursorPosition(0, top + index);
+            var marker = index == selectedIndex ? ">" : " ";
+            var text = $"{marker} {options[index].Label}";
+            Console.Write(text.PadRight(Math.Max(Console.WindowWidth - 1, text.Length)));
         }
     }
 
@@ -231,6 +266,8 @@ static class Program
         var principal = new WindowsPrincipal(identity);
         return principal.IsInRole(WindowsBuiltInRole.Administrator);
     }
+
+    private sealed record MenuOption<T>(string Label, T Value);
 
     private sealed class ConsoleFileProgress : IProgress<string>
     {
