@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: windows-latest
+
+    env:
+      DOTNET_VERSION: "10.0.x"
+      PROJECT_PATH: src/WslAutoCompact/WslAutoCompact.csproj
+      PUBLISH_DIR: artifacts/publish
+      RELEASE_DIR: artifacts/release
+      ASSET_NAME: WslAutoCompact-win-x64.exe
+
+    steps:
+      - name: Resolve release tag
+        id: vars
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $tag = "${{ github.event.inputs.tag }}"
+          } else {
+            $tag = "${{ github.ref_name }}"
+          }
+
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            throw "Release tag is empty."
+          }
+
+          if ($tag -notmatch '^v.+') {
+            throw "Release tag must start with 'v'. Actual: $tag"
+          }
+
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.vars.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Build
+        shell: pwsh
+        run: dotnet build WslAutoCompact.slnx -c Release
+
+      - name: Verify formatting
+        shell: pwsh
+        run: dotnet format WslAutoCompact.slnx --verify-no-changes
+
+      - name: Publish win-x64
+        shell: pwsh
+        run: |
+          dotnet publish $env:PROJECT_PATH `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:PublishTrimmed=false `
+            -p:PublishReadyToRun=false `
+            -p:ContinuousIntegrationBuild=true `
+            -o $env:PUBLISH_DIR
+
+      - name: Prepare release assets
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path $env:RELEASE_DIR -Force | Out-Null
+
+          $publishedExe = Join-Path $env:PUBLISH_DIR "WslAutoCompact.exe"
+          $releaseExe = Join-Path $env:RELEASE_DIR $env:ASSET_NAME
+          Copy-Item $publishedExe $releaseExe -Force
+
+          Push-Location $env:RELEASE_DIR
+          $checksumName = "$($env:ASSET_NAME).sha256"
+          $hash = Get-FileHash -Algorithm SHA256 $env:ASSET_NAME
+          "{0}  {1}" -f $hash.Hash.ToLowerInvariant(), $env:ASSET_NAME |
+            Set-Content -Path $checksumName -Encoding ascii
+          Pop-Location
+
+          Get-ChildItem $env:RELEASE_DIR | Format-Table Name, Length
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ steps.vars.outputs.tag }}"
+          $releaseExe = Join-Path $env:RELEASE_DIR $env:ASSET_NAME
+          $checksum = Join-Path $env:RELEASE_DIR "$($env:ASSET_NAME).sha256"
+
+          gh release create $tag `
+            $releaseExe `
+            $checksum `
+            --repo "${{ github.repository }}" `
+            --verify-tag `
+            --title "WSL Auto Compact $tag" `
+            --generate-notes
