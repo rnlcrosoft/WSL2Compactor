@@ -109,7 +109,7 @@ jobs:
           $releaseNotes = @'
           ## Download
 
-          Download `WSL2Compactor-win-x64.exe`, open Windows Terminal or PowerShell, and run it. The app requests administrator privileges automatically. .NET Runtime installation is not required.
+          Download and run `WSL2Compactor-win-x64.exe`.
 
           ## Files
 
