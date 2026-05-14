@@ -2,18 +2,30 @@
 
 WSL2Compactor is an interactive Windows terminal app for compacting WSL2 `ext4.vhdx` files.
 
-It scans detected WSL2 distros, lets you choose targets with terminal prompts, runs `fstrim`, shuts WSL down, compacts the selected VHDX files, and prints the bytes saved.
+It automates the Windows-side compaction flow for WSL2 distributions.
 
-## Features
+## What It Does
 
-- Detects WSL2 distributions from `HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss`.
-- Compacts detected WSL2 `ext4.vhdx` files without touching Linux files directly.
-- Shows progress, elapsed time, estimated remaining time, start time, and end time.
-- Uses `virtdisk.dll` / `CompactVirtualDisk` as the default backend.
-- Falls back to `diskpart compact vdisk` when the VirtDisk API fails.
-- Offers `Optimize-VHD` only when it is already available.
-- Saves logs to `%LocalAppData%\WSL2Compactor\Logs`.
-- Requires administrator privileges.
+1. Reads WSL distribution metadata from `HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss`.
+2. Selects WSL2 distributions with an existing `ext4.vhdx`.
+3. Runs `wsl.exe -d <distro> --user root fstrim -av`.
+4. Runs `wsl.exe --shutdown`.
+5. Compacts the selected VHDX file.
+
+## Why These Steps
+
+`fstrim` asks the Linux filesystem to discard unused blocks. That gives Windows useful block-discard information before the VHDX file is compacted.
+
+`wsl.exe --shutdown` is required because the VHDX file must not be held open by WSL while Windows compacts it.
+
+The default backend is `virtdisk.dll` / `CompactVirtualDisk` with `COMPACT_VIRTUAL_DISK_FLAG_NO_ZERO_SCAN`. This is the fast path for the app because `fstrim` already performs the Linux-side discard step, so a full zero scan is usually unnecessary for WSL2 compaction.
+
+If the VirtDisk API fails, the app falls back to `diskpart compact vdisk`. `Optimize-VHD` is offered only when it already exists on the machine.
+
+> [!NOTE]
+> `Optimize-VHD` is installed with Hyper-V tooling. On Windows Home, Hyper-V is not exposed by default. If you want to make the Hyper-V `Optimize-VHD` backend available through an unofficial DISM package route, this gist describes one approach: [Hyper-V in Windows 10 and Windows 11 Home Edition](https://gist.github.com/HimDek/6edde284203a620745fad3f762be603b). Expect a Windows reboot after changing Hyper-V features.
+
+Logs are written to `%LocalAppData%\WSL2Compactor\Logs`. Administrator privileges are required.
 
 ## Download
 
