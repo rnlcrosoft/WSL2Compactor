@@ -113,6 +113,7 @@ internal sealed class TerminalRunDisplay : IProgress<CompactProgressUpdate>
         table.AddRow("Phase", Markup.Escape(current?.Phase ?? "starting"));
         table.AddRow("Message", Markup.Escape(Trim(current?.Message ?? "Waiting for work to start.", 120)));
         table.AddRow("Progress", Markup.Escape(BuildProgressText(current, spinnerIndex)));
+        table.AddRow("API status", Markup.Escape(BuildApiStatusText(current)));
         table.AddRow("Elapsed", Markup.Escape(FormatDuration(now - startedAt)));
         table.AddRow("Phase elapsed", Markup.Escape(FormatDuration(now - phaseStartedAt)));
         table.AddRow("ETA", Markup.Escape(EstimateEta(current, now - phaseStartedAt)));
@@ -191,7 +192,9 @@ internal sealed class TerminalRunDisplay : IProgress<CompactProgressUpdate>
 
         if (runEvent.Percent is { } percent)
         {
-            text += $" [grey]({percent:0.#}%)[/]";
+            text += runEvent is { IsComplete: false, OperationStatus: 997, Percent: >= 100 }
+                ? " [grey](API 100%, pending)[/]"
+                : $" [grey]({percent:0.#}%)[/]";
         }
 
         return new Markup(text);
@@ -204,11 +207,42 @@ internal sealed class TerminalRunDisplay : IProgress<CompactProgressUpdate>
             return $"{SpinnerFrames[spinnerIndex % SpinnerFrames.Length]} running";
         }
 
+        if (!current.IsComplete && current.OperationStatus == 997 && percent >= 100)
+        {
+            return $"{SpinnerFrames[spinnerIndex % SpinnerFrames.Length]} compacting; API reports 100%, operation still pending";
+        }
+
         var displayPercent = Math.Clamp(percent, 0, 100);
         var width = 34;
         var filled = (int)Math.Round(width * displayPercent / 100, MidpointRounding.AwayFromZero);
         filled = Math.Clamp(filled, 0, width);
         return $"[{new string('#', filled)}{new string('-', width - filled)}] {displayPercent,5:0.0}%";
+    }
+
+    private static string BuildApiStatusText(CompactProgressUpdate? current)
+    {
+        if (current is null)
+        {
+            return "-";
+        }
+
+        var parts = new List<string>();
+        if (current.OperationStatus is { } status)
+        {
+            parts.Add(status == 997 ? "ERROR_IO_PENDING" : $"0x{status:X8}");
+        }
+
+        if (current.CalculatedPercent is { } percent)
+        {
+            parts.Add($"apiPercent={percent:0.###}%");
+        }
+
+        if (current.CurrentValue is { } currentValue && current.CompletionValue is { } completionValue)
+        {
+            parts.Add($"raw={currentValue}/{completionValue}");
+        }
+
+        return parts.Count == 0 ? "-" : string.Join(", ", parts);
     }
 
     private static string EstimateEta(CompactProgressUpdate? current, TimeSpan phaseElapsed)

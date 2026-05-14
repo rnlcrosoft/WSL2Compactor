@@ -8,9 +8,10 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
 {
     private const uint ErrorSuccess = 0;
     private const uint ErrorIoPending = 997;
+    private const string BackendName = "VirtDisk API";
     private static readonly Guid MicrosoftVirtualStorageVendorId = new("EC984AEC-A0F9-47E9-901F-71415A66345B");
 
-    public string Name => "VirtDisk API";
+    public string Name => BackendName;
 
     public async Task CompactAsync(string vhdPath, IProgress<CompactProgressUpdate> progress, CancellationToken cancellationToken)
     {
@@ -80,11 +81,17 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
             overlappedPtr = Marshal.AllocHGlobal(Marshal.SizeOf<NativeOverlapped>());
             Marshal.StructureToPtr(overlapped, overlappedPtr, fDeleteOld: false);
 
-            progress.Report(CompactProgressUpdate.Progress("VirtDisk", "CompactVirtualDisk started", 5, backend: "VirtDisk API"));
-            var compactResult = CompactVirtualDisk(handle, CompactVirtualDiskFlag.None, IntPtr.Zero, overlappedPtr);
+            var parameters = new CompactVirtualDiskParameters
+            {
+                Version = CompactVirtualDiskVersion.Version1,
+                Reserved = 0
+            };
+
+            progress.Report(CompactProgressUpdate.Progress("VirtDisk", "CompactVirtualDisk quick mode started", 5, backend: BackendName));
+            var compactResult = CompactVirtualDisk(handle, CompactVirtualDiskFlag.NoZeroScan, ref parameters, overlappedPtr);
             if (compactResult == ErrorSuccess)
             {
-                progress.Report(CompactProgressUpdate.Complete("VirtDisk", "CompactVirtualDisk completed", backend: "VirtDisk API"));
+                progress.Report(CompactProgressUpdate.Complete("VirtDisk", "CompactVirtualDisk completed", backend: BackendName));
                 return;
             }
             if (compactResult != ErrorIoPending)
@@ -108,7 +115,7 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
                     var calculatedPercent = CalculatePercent(virtualDiskProgress);
                     maxPercent = Math.Max(maxPercent, calculatedPercent);
                     var message = calculatedPercent >= 100
-                        ? "Completing VirtDisk operation"
+                        ? "CompactVirtualDisk pending completion"
                         : "CompactVirtualDisk running";
 
                     progress.Report(CompactProgressUpdate.Progress(
@@ -116,7 +123,7 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
                         message,
                         maxPercent,
                         distro: null,
-                        backend: "VirtDisk API",
+                        backend: BackendName,
                         currentValue: virtualDiskProgress.CurrentValue,
                         completionValue: virtualDiskProgress.CompletionValue,
                         operationStatus: virtualDiskProgress.OperationStatus,
@@ -131,7 +138,7 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
                     throw new Win32Exception((int)virtualDiskProgress.OperationStatus, $"CompactVirtualDisk failed: {FormatWin32Error(virtualDiskProgress.OperationStatus)}");
                 }
 
-                progress.Report(CompactProgressUpdate.Complete("VirtDisk", "CompactVirtualDisk completed", backend: "VirtDisk API"));
+                progress.Report(CompactProgressUpdate.Complete("VirtDisk", "CompactVirtualDisk completed", backend: BackendName));
                 return;
             }
         }
@@ -222,7 +229,7 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
     private static extern uint CompactVirtualDisk(
         SafeFileHandle virtualDiskHandle,
         CompactVirtualDiskFlag flags,
-        IntPtr parameters,
+        ref CompactVirtualDiskParameters parameters,
         IntPtr overlapped);
 
     [DllImport("virtdisk.dll")]
@@ -301,7 +308,22 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
 
     private enum CompactVirtualDiskFlag : uint
     {
-        None = 0
+        None = 0,
+        NoZeroScan = 0x00000001,
+        NoBlockMoves = 0x00000002
+    }
+
+    private enum CompactVirtualDiskVersion : uint
+    {
+        Unspecified = 0,
+        Version1 = 1
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CompactVirtualDiskParameters
+    {
+        public CompactVirtualDiskVersion Version;
+        public uint Reserved;
     }
 
     private enum DetachVirtualDiskFlag : uint
