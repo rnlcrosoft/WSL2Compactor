@@ -38,6 +38,7 @@ dotnet publish src/WslAutoCompact/WslAutoCompact.csproj \
   -r win-x64 \
   --self-contained true \
   -p:PublishSingleFile=true \
+  -p:EnableCompressionInSingleFile=true \
   -p:PublishTrimmed=false \
   -p:PublishReadyToRun=false
 ```
@@ -60,9 +61,17 @@ or, from PowerShell:
 .\scripts\publish-win-x64.ps1
 ```
 
-## GitHub Release
+## Download
 
-Releases are automated by `.github/workflows/release.yml`.
+Download `WslAutoCompact-win-x64.exe` from the [latest GitHub Release](https://github.com/rnlcrosoft/WSLAutoCompact/releases/latest) and run it.
+
+The executable requests administrator privileges automatically. .NET Runtime installation is not required. If Windows SmartScreen appears, choose to run the app only if you trust this repository and release.
+
+The `.sha256` file is optional and can be used to verify the downloaded executable.
+
+## Publishing a GitHub Release
+
+Releases are automated by `.github/workflows/release.yml`. Maintainers can publish a new release by pushing a version tag.
 
 After committing and pushing the release commit, create and push a version tag:
 
@@ -71,7 +80,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The workflow publishes these release assets:
+The workflow publishes these assets:
 
 ```text
 WslAutoCompact-win-x64.exe

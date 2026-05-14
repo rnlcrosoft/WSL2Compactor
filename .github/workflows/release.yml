@@ -74,6 +74,7 @@ jobs:
             -r win-x64 `
             --self-contained true `
             -p:PublishSingleFile=true `
+            -p:EnableCompressionInSingleFile=true `
             -p:PublishTrimmed=false `
             -p:PublishReadyToRun=false `
             -p:ContinuousIntegrationBuild=true `
@@ -105,6 +106,22 @@ jobs:
           $tag = "${{ steps.vars.outputs.tag }}"
           $releaseExe = Join-Path $env:RELEASE_DIR $env:ASSET_NAME
           $checksum = Join-Path $env:RELEASE_DIR "$($env:ASSET_NAME).sha256"
+          $releaseNotes = @'
+          ## Download
+
+          Download `WslAutoCompact-win-x64.exe` and run it.
+
+          The app requests administrator privileges automatically. .NET Runtime installation is not required.
+
+          ## Files
+
+          - `WslAutoCompact-win-x64.exe`: self-contained Windows x64 executable.
+          - `WslAutoCompact-win-x64.exe.sha256`: SHA256 checksum for the executable.
+
+          ## Before running
+
+          Running compact stops WSL. Docker Desktop, VS Code Remote, and open WSL terminals may be interrupted.
+          '@
 
           gh release create $tag `
             $releaseExe `
@@ -112,4 +129,5 @@ jobs:
             --repo "${{ github.repository }}" `
             --verify-tag `
             --title "WSL Auto Compact $tag" `
+            --notes $releaseNotes `
             --generate-notes
