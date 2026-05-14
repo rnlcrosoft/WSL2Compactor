@@ -109,9 +109,9 @@ jobs:
           $releaseNotes = @'
           ## Download
 
-          Download `WslAutoCompact-win-x64.exe` and run it.
+          Download `WslAutoCompact-win-x64.exe`, open Windows Terminal or PowerShell, and run it.
 
-          The app requests administrator privileges automatically. .NET Runtime installation is not required.
+          Run it from an elevated terminal for the cleanest experience. The app also requests administrator privileges automatically. .NET Runtime installation is not required.
 
           ## Files
 

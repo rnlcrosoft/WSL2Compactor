@@ -1,13 +1,14 @@
 # WSL Auto Compact
 
-WSL Auto Compact is a small Windows GUI app for compacting WSL2 `ext4.vhdx` files.
+WSL Auto Compact is an interactive Windows terminal app for compacting WSL2 `ext4.vhdx` files.
 
-It shows each step in a CLI-style log, runs `fstrim`, shuts WSL down, then compacts the selected VHDX files.
+It scans your WSL2 distros, waits for your selection, runs `fstrim`, shuts WSL down, compacts the selected VHDX files, and prints the bytes saved.
 
 ## Features
 
 - Detects WSL2 distributions from `HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss`.
 - Targets only existing `ext4.vhdx` files.
+- Runs as an interactive terminal workflow with confirmation prompts.
 - Runs `wsl.exe -d <distro> --user root fstrim -av` before compacting.
 - Runs `wsl.exe --shutdown` before touching the VHDX.
 - Uses `virtdisk.dll` / `CompactVirtualDisk` as the default backend.
@@ -63,9 +64,9 @@ or, from PowerShell:
 
 ## Download
 
-Download `WslAutoCompact-win-x64.exe` from the [latest GitHub Release](https://github.com/rnlcrosoft/WSLAutoCompact/releases/latest) and run it.
+Download `WslAutoCompact-win-x64.exe` from the [latest GitHub Release](https://github.com/rnlcrosoft/WSLAutoCompact/releases/latest), open Windows Terminal or PowerShell, and run it.
 
-The executable requests administrator privileges automatically. .NET Runtime installation is not required. If Windows SmartScreen appears, choose to run the app only if you trust this repository and release.
+Run it from an elevated terminal for the cleanest experience. The executable also requests administrator privileges automatically. .NET Runtime installation is not required. If Windows SmartScreen appears, choose to run the app only if you trust this repository and release.
 
 The `.sha256` file is optional and can be used to verify the downloaded executable.
 
