@@ -23,8 +23,6 @@ The app offers two compact modes:
 - `No zero scan`: uses `COMPACT_VIRTUAL_DISK_FLAG_NO_ZERO_SCAN`.
 - `Zero scan`: calls `CompactVirtualDisk` without that flag.
 
-`Optimize-VHD` and `DiskPart` are not automatic backends.
-
 ## Displayed Values
 
 | Column | Meaning |
@@ -43,24 +41,33 @@ The app does not show a pre-run savings estimate because that cannot be computed
 Requirements:
 
 - .NET 10 SDK
-- Make
 - Windows 10/11 x64 target
 
-The app is a Windows x64 executable. The Makefile can be used from WSL or from a Unix-like shell with Make on Windows.
+The app is a Windows x64 executable. End users should download the self-contained executable from Releases; building from source requires the .NET 10 SDK.
 
-From the repository root:
+From Windows PowerShell:
 
-```sh
-make build
-make publish
+```powershell
+dotnet build .\WSL2Compactor.slnx -c Release
+
+dotnet publish .\src\WSL2Compactor\WSL2Compactor.csproj `
+  -c Release `
+  -r win-x64 `
+  --self-contained true `
+  -p:PublishSingleFile=true `
+  -p:EnableCompressionInSingleFile=true `
+  -p:PublishTrimmed=true `
+  -p:PublishReadyToRun=false `
+  -o .\.build\publish
 ```
 
 The published executable is written to `.build/publish/WSL2Compactor.exe`.
 
 For release checks, run:
 
-```sh
-make verify
+```powershell
+dotnet build .\WSL2Compactor.slnx -c Release
+dotnet format .\WSL2Compactor.slnx --verify-no-changes
 ```
 
 ## License
