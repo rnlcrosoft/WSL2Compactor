@@ -91,6 +91,8 @@ static class Program
             if (selected.Count == 0)
             {
                 log.Info("selection", "No distros selected.");
+                singleInstanceGuard.Dispose();
+                await WaitWithCanceledMessageAsync().ConfigureAwait(false);
                 return 0;
             }
 
@@ -109,6 +111,8 @@ static class Program
             if (!runConfirmed)
             {
                 log.Info("confirmation", "Run canceled before compaction.");
+                singleInstanceGuard.Dispose();
+                await WaitWithCanceledMessageAsync().ConfigureAwait(false);
                 return 0;
             }
 
@@ -130,8 +134,8 @@ static class Program
         {
             exitGuard.SetProtected(false);
             log.Warning("cancel", "Operation canceled.");
-            AnsiConsole.MarkupLine("[yellow]Operation canceled.[/]");
             AnsiConsole.MarkupLine($"Log saved to: [grey]{Markup.Escape(log.LogFile)}[/]");
+            await WaitWithCanceledMessageAsync().ConfigureAwait(false);
             return 130;
         }
         catch (CompactFailureException ex)
@@ -139,6 +143,7 @@ static class Program
             exitGuard.SetProtected(false);
             log.Error("error", ex.ToString(), ex.Distro, ex.Backend);
             PrintFailurePanel(ex, log);
+            await Task.Delay(Timeout.InfiniteTimeSpan).ConfigureAwait(false);
             return 1;
         }
         catch (Exception ex)
@@ -152,6 +157,7 @@ static class Program
                     ex.Message,
                     innerException: ex),
                 log);
+            await Task.Delay(Timeout.InfiniteTimeSpan).ConfigureAwait(false);
             return 1;
         }
     }
@@ -418,6 +424,13 @@ static class Program
 
     private static string FormatCompactMode(CompactMode compactMode)
         => compactMode == CompactMode.ZeroScan ? "Zero scan" : "No zero scan";
+
+    private static async Task WaitWithCanceledMessageAsync()
+    {
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[yellow]Canceled.[/]");
+        await Task.Delay(Timeout.InfiniteTimeSpan).ConfigureAwait(false);
+    }
 
     private static bool IsRunningAsAdministrator()
     {
