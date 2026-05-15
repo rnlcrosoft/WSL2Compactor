@@ -17,7 +17,7 @@ permissions:
 jobs:
   release:
     name: Build and publish release
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     env:
       DOTNET_VERSION: "10.0.x"
