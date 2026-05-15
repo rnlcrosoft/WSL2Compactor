@@ -5,11 +5,10 @@ RUNTIME ?= win-x64
 PUBLISH_DIR := .build/publish
 PUBLISH_EXE := $(PUBLISH_DIR)/WSL2Compactor.exe
 MAX_EXE_SIZE_BYTES ?= 26214400
-DESKTOP_WIN_DIR ?= $(shell powershell.exe -NoProfile -Command "[Environment]::GetFolderPath('Desktop')" 2>/dev/null | tr -d '\r')
-DESKTOP_DIR ?= $(shell win_path='$(DESKTOP_WIN_DIR)'; if command -v wslpath >/dev/null 2>&1; then wslpath -u "$$win_path"; elif command -v cygpath >/dev/null 2>&1; then cygpath -u "$$win_path"; else printf '%s' "$$win_path"; fi)
-DESKTOP_EXE ?= $(DESKTOP_DIR)/WSL2Compactor.exe
+PUBLISH_EXE_WIN ?= $(shell if command -v wslpath >/dev/null 2>&1; then wslpath -w "$(PUBLISH_EXE)"; elif command -v cygpath >/dev/null 2>&1; then cygpath -w "$(PUBLISH_EXE)"; else printf '%s' "$(PUBLISH_EXE)"; fi)
+DESKTOP_EXE ?=
 
-.PHONY: build publish format-check verify clean copy-desktop run
+.PHONY: build publish format-check verify clean copy-desktop
 
 build:
 	dotnet build $(SOLUTION) -c $(CONFIGURATION)
@@ -43,11 +42,17 @@ clean:
 
 copy-desktop:
 	@test -f "$(PUBLISH_EXE)" || (echo "Published executable not found: $(PUBLISH_EXE). Run make publish first." >&2; exit 1)
-	@test -d "$(DESKTOP_DIR)" || (echo "Desktop directory not found: $(DESKTOP_DIR)" >&2; exit 1)
-	cp "$(PUBLISH_EXE)" "$(DESKTOP_EXE)"
-	@echo "Copied to $(DESKTOP_EXE)"
-
-run:
-	$(MAKE) publish
-	$(MAKE) copy-desktop
-	powershell.exe -NoProfile -ExecutionPolicy Bypass -Command 'Start-Process -FilePath (Join-Path ([Environment]::GetFolderPath("Desktop")) "WSL2Compactor.exe") -Verb RunAs'
+	@if [ -n "$(DESKTOP_EXE)" ]; then \
+		target_dir=$$(dirname "$(DESKTOP_EXE)"); \
+		test -d "$$target_dir" || (echo "Target directory not found: $$target_dir" >&2; exit 1); \
+		cp "$(PUBLISH_EXE)" "$(DESKTOP_EXE)"; \
+		echo "Copied to $(DESKTOP_EXE)"; \
+	elif command -v powershell.exe >/dev/null 2>&1 && powershell.exe -NoProfile -Command "exit 0" >/dev/null 2>&1; then \
+		powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '$$ErrorActionPreference = "Stop"; $$source = "$(PUBLISH_EXE_WIN)"; $$desktop = [Environment]::GetFolderPath("Desktop"); if ([string]::IsNullOrWhiteSpace($$desktop)) { throw "Desktop folder could not be detected." }; $$target = Join-Path $$desktop "WSL2Compactor.exe"; Copy-Item -LiteralPath $$source -Destination $$target -Force; Write-Host "Copied to $$target"'; \
+	else \
+		target_dir=$$(find /mnt/c/Users -mindepth 2 -maxdepth 3 \( -path "*/Desktop" -o -path "*/OneDrive/Desktop" \) -type d -writable 2>/dev/null | grep -Ev "/(Default|Default User|Public|All Users)/" | head -n 1); \
+		test -n "$$target_dir" || (echo "Desktop directory could not be detected. Pass DESKTOP_EXE=/path/to/WSL2Compactor.exe." >&2; exit 1); \
+		target="$$target_dir/WSL2Compactor.exe"; \
+		cp "$(PUBLISH_EXE)" "$$target"; \
+		echo "Copied to $$target"; \
+	fi
