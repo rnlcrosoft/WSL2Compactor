@@ -9,13 +9,14 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>WSL2Compactor</AssemblyName>
     <RootNamespace>WSL2Compactor</RootNamespace>
-    <Version>0.1.1</Version>
+    <Version>0.2.0</Version>
     <Authors>WSL2Compactor contributors</Authors>
     <Description>Interactive app for compacting WSL2 ext4.vhdx files.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="DiscUtils.Vhdx" Version="0.16.13" />
     <PackageReference Include="Spectre.Console" Version="0.55.2" />
   </ItemGroup>
 

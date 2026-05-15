@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace WSL2Compactor.Services;
 
-internal readonly record struct VhdxSizeSnapshot(long FileSizeBytes, long DiskUsageBytes);
+internal readonly record struct VhdxSizeSnapshot(long FileSizeBytes, long HostAllocatedBytes);
 
 internal static class VhdxSizeProbe
 {
@@ -12,10 +12,10 @@ internal static class VhdxSizeProbe
     public static VhdxSizeSnapshot Read(string path)
     {
         var fileSizeBytes = new FileInfo(path).Length;
-        return new VhdxSizeSnapshot(fileSizeBytes, ReadDiskUsageBytes(path, fileSizeBytes));
+        return new VhdxSizeSnapshot(fileSizeBytes, ReadHostAllocatedBytes(path, fileSizeBytes));
     }
 
-    private static long ReadDiskUsageBytes(string path, long fallbackBytes)
+    private static long ReadHostAllocatedBytes(string path, long fallbackBytes)
     {
         if (!OperatingSystem.IsWindows())
         {

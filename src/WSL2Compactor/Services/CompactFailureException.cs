@@ -22,7 +22,6 @@ internal sealed class CompactFailureException : Exception
         string? vhdPath = null,
         int? exitCode = null,
         uint? win32ErrorCode = null,
-        bool fallbackAllowed = false,
         Exception? innerException = null)
         : base(message, innerException)
     {
@@ -33,7 +32,6 @@ internal sealed class CompactFailureException : Exception
         VhdPath = vhdPath;
         ExitCode = exitCode;
         Win32ErrorCode = win32ErrorCode;
-        FallbackAllowed = fallbackAllowed;
     }
 
     public CompactFailureKind Kind { get; }
@@ -50,8 +48,6 @@ internal sealed class CompactFailureException : Exception
 
     public uint? Win32ErrorCode { get; }
 
-    public bool FallbackAllowed { get; }
-
     public static CompactFailureKind ClassifyWin32(uint errorCode)
         => errorCode switch
         {
@@ -62,9 +58,6 @@ internal sealed class CompactFailureException : Exception
             _ => CompactFailureKind.Backend
         };
 
-    public static bool IsFallbackSafe(CompactFailureKind kind)
-        => kind is CompactFailureKind.Backend or CompactFailureKind.CommandFailed or CompactFailureKind.Unknown;
-
     public static CompactFailureException FromWin32(
         uint errorCode,
         string phase,
@@ -72,7 +65,6 @@ internal sealed class CompactFailureException : Exception
         string? distro = null,
         string? backend = null,
         string? vhdPath = null,
-        bool fallbackAllowed = true,
         Exception? innerException = null)
     {
         var kind = ClassifyWin32(errorCode);
@@ -84,7 +76,6 @@ internal sealed class CompactFailureException : Exception
             backend,
             vhdPath,
             win32ErrorCode: errorCode,
-            fallbackAllowed: fallbackAllowed && IsFallbackSafe(kind),
             innerException: innerException);
     }
 }

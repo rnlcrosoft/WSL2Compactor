@@ -22,8 +22,8 @@ jobs:
     env:
       DOTNET_VERSION: "10.0.x"
       PROJECT_PATH: src/WSL2Compactor/WSL2Compactor.csproj
-      PUBLISH_DIR: artifacts/publish
-      RELEASE_DIR: artifacts/release
+      PUBLISH_DIR: .build/publish
+      RELEASE_DIR: .build/release
       ASSET_NAME: WSL2Compactor-win-x64.exe
       MAX_EXE_SIZE_BYTES: "26214400"
 
@@ -123,7 +123,7 @@ jobs:
           ## Files
 
           - `WSL2Compactor-win-x64.exe`: self-contained Windows x64 executable.
-          - `WSL2Compactor-win-x64.exe.sha256`: SHA256 checksum for the executable.
+          - `WSL2Compactor-win-x64.exe.sha256`: optional SHA256 checksum.
           '@
 
           gh release view $tag --repo "${{ github.repository }}" *> $null

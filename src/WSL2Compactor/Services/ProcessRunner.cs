@@ -5,6 +5,9 @@ namespace WSL2Compactor.Services;
 
 internal sealed class ProcessRunner
 {
+    private readonly object _activeProcessGate = new();
+    private readonly Dictionary<int, Process> _activeProcesses = [];
+
     public async Task<ProcessResult> RunAsync(
         string fileName,
         IEnumerable<string> arguments,
@@ -57,8 +60,15 @@ internal sealed class ProcessRunner
         };
 
         process.Start();
+        RegisterActiveProcess(process);
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
+
+        using var cancellationRegistration = cancellationToken.Register(() =>
+        {
+            log?.Report("Cancellation requested. Stopping active child process...");
+            TryKill(process);
+        });
 
         try
         {
@@ -68,6 +78,10 @@ internal sealed class ProcessRunner
         {
             TryKill(process);
             throw;
+        }
+        finally
+        {
+            UnregisterActiveProcess(process);
         }
 
         await Task.Run(process.WaitForExit, CancellationToken.None).ConfigureAwait(false);
@@ -90,6 +104,52 @@ internal sealed class ProcessRunner
         {
             return false;
         }
+    }
+
+    public int KillActiveProcesses(string reason, Action<string>? log = null)
+    {
+        List<Process> processes;
+        lock (_activeProcessGate)
+        {
+            processes = _activeProcesses.Values.ToList();
+        }
+
+        var stopped = 0;
+        foreach (var process in processes)
+        {
+            try
+            {
+                if (process.HasExited)
+                {
+                    continue;
+                }
+
+                log?.Invoke($"Stopping child process tree: {SafeProcessName(process)} ({process.Id}). Reason: {reason}");
+                process.Kill(entireProcessTree: true);
+                stopped++;
+            }
+            catch (Exception ex)
+            {
+                log?.Invoke($"Failed to stop child process tree. Reason: {reason}. Error: {ex.Message}");
+            }
+        }
+
+        foreach (var process in processes)
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    _ = process.WaitForExit(5000);
+                }
+            }
+            catch
+            {
+                // The process may already be gone or disposed.
+            }
+        }
+
+        return stopped;
     }
 
     public static string NormalizeProcessText(string text)
@@ -117,6 +177,22 @@ internal sealed class ProcessRunner
             : value;
     }
 
+    private void RegisterActiveProcess(Process process)
+    {
+        lock (_activeProcessGate)
+        {
+            _activeProcesses[process.Id] = process;
+        }
+    }
+
+    private void UnregisterActiveProcess(Process process)
+    {
+        lock (_activeProcessGate)
+        {
+            _activeProcesses.Remove(process.Id);
+        }
+    }
+
     private static void TryKill(Process process)
     {
         try
@@ -129,6 +205,18 @@ internal sealed class ProcessRunner
         catch
         {
             // The process may already be gone.
+        }
+    }
+
+    private static string SafeProcessName(Process process)
+    {
+        try
+        {
+            return process.ProcessName;
+        }
+        catch
+        {
+            return "unknown";
         }
     }
 }

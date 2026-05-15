@@ -6,8 +6,16 @@ internal sealed record WslDistribution(
     int Version,
     string VhdPath,
     string State,
-    long DiskUsageBytes,
-    long VirtualSizeBytes)
+    long HostAllocatedBytes,
+    long VhdxFileSizeBytes,
+    long? LinuxUsedBytes,
+    long? Ext4OverheadBytes,
+    string? LinuxUsageSource)
 {
     public bool IsWsl2 => Version == 2;
+
+    public long? LinuxFootprintBytes
+        => LinuxUsedBytes is null || Ext4OverheadBytes is null
+            ? null
+            : LinuxUsedBytes.Value + Ext4OverheadBytes.Value;
 }

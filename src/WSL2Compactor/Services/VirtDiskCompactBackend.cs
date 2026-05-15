@@ -4,16 +4,26 @@ using Microsoft.Win32.SafeHandles;
 
 namespace WSL2Compactor.Services;
 
-internal sealed class VirtDiskCompactBackend : ICompactBackend
+internal sealed class VirtDiskCompactBackend
 {
     private const uint ErrorSuccess = 0;
     private const uint ErrorIoPending = 997;
+    private const uint ErrorOperationAborted = 995;
+    private const uint WaitObject0 = 0;
+    private const uint WaitTimeout = 258;
+    private const uint WaitFailed = 0xFFFFFFFF;
     private const string BackendName = "VirtDisk API";
     private static readonly Guid MicrosoftVirtualStorageVendorId = new("EC984AEC-A0F9-47E9-901F-71415A66345B");
+    private readonly VirtDiskOperationRegistry _operationRegistry;
+
+    public VirtDiskCompactBackend(VirtDiskOperationRegistry operationRegistry)
+    {
+        _operationRegistry = operationRegistry;
+    }
 
     public string Name => BackendName;
 
-    public async Task CompactAsync(string vhdPath, IProgress<CompactProgressUpdate> progress, CancellationToken cancellationToken)
+    public async Task CompactAsync(string vhdPath, bool quickMode, IProgress<CompactProgressUpdate> progress, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         progress.Report(CompactProgressUpdate.Progress("VirtDisk", "OpenVirtualDisk", 0, backend: Name));
@@ -42,7 +52,7 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            await CompactWithProgressAsync(handle, vhdPath, progress, cancellationToken).ConfigureAwait(false);
+            await CompactWithProgressAsync(handle, vhdPath, quickMode, progress, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -56,9 +66,10 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
         }
     }
 
-    private static async Task CompactWithProgressAsync(
+    private async Task CompactWithProgressAsync(
         SafeFileHandle handle,
         string vhdPath,
+        bool quickMode,
         IProgress<CompactProgressUpdate> progress,
         CancellationToken cancellationToken)
     {
@@ -94,8 +105,11 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
                 Reserved = 0
             };
 
-            progress.Report(CompactProgressUpdate.Progress("VirtDisk", "CompactVirtualDisk quick mode started", 5, backend: BackendName));
-            var compactResult = CompactVirtualDisk(handle, CompactVirtualDiskFlag.NoZeroScan, ref parameters, overlappedPtr);
+            var flags = quickMode ? CompactVirtualDiskFlag.NoZeroScan : CompactVirtualDiskFlag.None;
+            var mode = quickMode ? "no zero scan" : "zero scan";
+            using var operationRegistration = _operationRegistry.Register(handle, overlappedPtr, eventHandle, vhdPath, mode);
+            progress.Report(CompactProgressUpdate.Progress("VirtDisk", $"CompactVirtualDisk {mode} mode started", 5, backend: BackendName));
+            var compactResult = CompactVirtualDisk(handle, flags, ref parameters, overlappedPtr);
             if (compactResult == ErrorSuccess)
             {
                 progress.Report(CompactProgressUpdate.Complete("VirtDisk", "CompactVirtualDisk completed", backend: BackendName));
@@ -114,6 +128,24 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
             var maxPercent = 5d;
             while (true)
             {
+                var waitResult = WaitForSingleObject(eventHandle, 500);
+                if (waitResult == WaitObject0)
+                {
+                    CompleteOverlappedOperation(handle, overlappedPtr, vhdPath, progress);
+                    return;
+                }
+
+                if (waitResult != WaitTimeout)
+                {
+                    var waitError = waitResult == WaitFailed ? (uint)Marshal.GetLastWin32Error() : waitResult;
+                    throw CompactFailureException.FromWin32(
+                        waitError,
+                        "VirtDisk",
+                        $"WaitForSingleObject failed: {FormatWin32Error(waitError)}",
+                        backend: BackendName,
+                        vhdPath: vhdPath);
+                }
+
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var progressResult = GetVirtualDiskOperationProgress(handle, overlappedPtr, out var virtualDiskProgress);
@@ -181,6 +213,39 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
 
             CloseHandle(eventHandle);
         }
+    }
+
+    private static void CompleteOverlappedOperation(
+        SafeFileHandle handle,
+        IntPtr overlappedPtr,
+        string vhdPath,
+        IProgress<CompactProgressUpdate> progress)
+    {
+        var completed = GetOverlappedResult(handle, overlappedPtr, out _, bWait: false);
+        var finalError = completed ? ErrorSuccess : (uint)Marshal.GetLastWin32Error();
+        if (finalError == ErrorSuccess)
+        {
+            progress.Report(CompactProgressUpdate.Complete("VirtDisk", "CompactVirtualDisk completed", backend: BackendName));
+            return;
+        }
+
+        if (finalError == ErrorOperationAborted)
+        {
+            throw new CompactFailureException(
+                CompactFailureKind.Canceled,
+                "VirtDisk",
+                "VirtDisk compact was canceled. Compaction can be re-run later.",
+                backend: BackendName,
+                vhdPath: vhdPath,
+                win32ErrorCode: finalError);
+        }
+
+        throw CompactFailureException.FromWin32(
+            finalError,
+            "VirtDisk",
+            $"CompactVirtualDisk failed: {FormatWin32Error(finalError)}",
+            backend: BackendName,
+            vhdPath: vhdPath);
     }
 
     private static SafeFileHandle Open(string vhdPath)
@@ -272,6 +337,12 @@ internal sealed class VirtDiskCompactBackend : ICompactBackend
         SafeFileHandle virtualDiskHandle,
         IntPtr overlapped,
         out VirtualDiskProgress progress);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetOverlappedResult(SafeFileHandle hFile, IntPtr lpOverlapped, out uint lpNumberOfBytesTransferred, bool bWait);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
 
     [DllImport("virtdisk.dll")]
     private static extern uint DetachVirtualDisk(

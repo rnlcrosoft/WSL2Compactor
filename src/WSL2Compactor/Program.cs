@@ -10,6 +10,7 @@ static class Program
 {
     private const string AppName = "WSL2Compactor";
     private const string IssueUrl = "https://github.com/rnlcrosoft/WSL2Compactor/issues/new";
+    private const string SingleInstanceMutexName = @"Local\WSL2Compactor.SingleInstance";
 
     static async Task<int> Main()
     {
@@ -23,13 +24,12 @@ static class Program
         var logFile = Path.Combine(logDirectory, $"wsl2compactor-{DateTime.Now:yyyyMMdd-HHmmss}.log");
 
         var log = new RunLogger(logFile);
-        using var exitGuard = new ExitGuard(log);
         var processRunner = new ProcessRunner();
+        var virtDiskOperations = new VirtDiskOperationRegistry();
+        using var exitGuard = new ExitGuard(log, processRunner, virtDiskOperations);
         var distributionService = new WslDistributionService(processRunner);
-        var virtDiskBackend = new VirtDiskCompactBackend();
-        var diskPartBackend = new DiskPartCompactBackend(processRunner);
-        var optimizeVhdBackend = new OptimizeVhdCompactBackend(processRunner);
-        var orchestrator = new CompactOrchestrator(processRunner, virtDiskBackend, diskPartBackend, optimizeVhdBackend);
+        var virtDiskBackend = new VirtDiskCompactBackend(virtDiskOperations);
+        var orchestrator = new CompactOrchestrator(processRunner, virtDiskBackend);
 
         try
         {
@@ -41,6 +41,16 @@ static class Program
             log.Info("startup", $"Elevated: {elevated}");
             log.Info("startup", $"Log file: {logFile}");
 
+            using var singleInstanceGuard = SingleInstanceGuard.TryAcquire(SingleInstanceMutexName);
+            if (!singleInstanceGuard.IsAcquired)
+            {
+                const string message = "Another WSL2Compactor run is already active. Close it before starting a new run.";
+                log.Warning("startup", message);
+                AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(message)}[/]");
+                AnsiConsole.MarkupLine($"Log saved to: [grey]{Markup.Escape(log.LogFile)}[/]");
+                return 1;
+            }
+
             if (!elevated)
             {
                 log.Error("startup", "Administrator privileges are required for Windows-side VHDX compaction.");
@@ -51,7 +61,18 @@ static class Program
 
             log.Info("scan", "Scanning WSL2 distros.");
             AnsiConsole.MarkupLine("[grey]Scanning WSL2 distros...[/]");
-            var distributions = await distributionService.GetDistributionsAsync(CancellationToken.None).ConfigureAwait(false);
+            IReadOnlyList<WslDistribution> distributions;
+            exitGuard.SetProtected(true);
+            try
+            {
+                using var consoleModeGuard = new ConsoleModeGuard(log, "scan");
+                distributions = await distributionService.GetDistributionsAsync(exitGuard.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                exitGuard.SetProtected(false);
+            }
+
             log.Info("scan", distributions.Count == 0
                 ? "Detected distros: none"
                 : $"Detected distros: {string.Join(" | ", distributions.Select(FormatDistributionForLog))}");
@@ -74,14 +95,16 @@ static class Program
             }
 
             var rows = selected.Select(distribution => new DistributionRow(distribution)).ToList();
-            var optimizeAvailable = await optimizeVhdBackend.IsAvailableAsync(CancellationToken.None).ConfigureAwait(false);
-            log.Info("selection", $"Optimize-VHD available: {optimizeAvailable}");
-            var backendMode = PromptForBackend(optimizeAvailable);
-            log.Prompt("selection", $"Selected backend mode: {backendMode}");
+            var compactMode = PromptForCompactMode();
+            log.Prompt("selection", $"Selected compact mode: {compactMode}");
+            var backend = CompactOrchestrator.GetBackendName(compactMode);
+            log.Info("selection", $"Backend: {backend}");
 
             PrintSelectedDistributions(rows);
+            AnsiConsole.MarkupLine($"[grey]Compact mode:[/] {Markup.Escape(FormatCompactMode(compactMode))}");
+            AnsiConsole.MarkupLine($"[grey]Backend:[/] {Markup.Escape(backend)}");
             AnsiConsole.WriteLine();
-            var runConfirmed = AnsiConsole.Confirm("Run wsl --shutdown and compact selected distros?", defaultValue: true);
+            var runConfirmed = AnsiConsole.Confirm("Continue with fstrim, wsl --shutdown and compact selected distros?", defaultValue: true);
             log.Prompt("confirmation", $"Run confirmed: {runConfirmed}");
             if (!runConfirmed)
             {
@@ -90,33 +113,24 @@ static class Program
             }
 
             var startedAt = DateTimeOffset.Now;
-            var display = new TerminalRunDisplay(log);
-            exitGuard.SetProtected(true);
-            try
-            {
-                using var consoleModeGuard = new ConsoleModeGuard(log);
-                await display.RunAsync(
-                    (progress, token) => orchestrator.RunAsync(rows, backendMode, progress, token),
-                    exitGuard.Token).ConfigureAwait(false);
-            }
-            finally
-            {
-                exitGuard.SetProtected(false);
-            }
+            await RunCompactionAsync(orchestrator, rows, compactMode, exitGuard, log).ConfigureAwait(false);
 
             var endedAt = DateTimeOffset.Now;
 
-            PrintSummary(rows, startedAt, endedAt, log);
+            PrintSummary(rows, startedAt, endedAt, log, $"{FormatCompactMode(compactMode)} summary");
+            singleInstanceGuard.Dispose();
+
             AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[green]Complete.[/] You can close this terminal window when ready. Press Ctrl+C to exit this process.");
+            AnsiConsole.MarkupLine("[green]Complete.[/]");
             await Task.Delay(Timeout.InfiniteTimeSpan).ConfigureAwait(false);
+
             return 0;
         }
         catch (OperationCanceledException)
         {
             exitGuard.SetProtected(false);
-            log.Warning("cancel", "Run canceled.");
-            AnsiConsole.MarkupLine("[yellow]Canceled.[/]");
+            log.Warning("cancel", "Operation canceled.");
+            AnsiConsole.MarkupLine("[yellow]Operation canceled.[/]");
             AnsiConsole.MarkupLine($"Log saved to: [grey]{Markup.Escape(log.LogFile)}[/]");
             return 130;
         }
@@ -136,7 +150,6 @@ static class Program
                     CompactFailureKind.Unknown,
                     "error",
                     ex.Message,
-                    fallbackAllowed: false,
                     innerException: ex),
                 log);
             return 1;
@@ -152,25 +165,47 @@ static class Program
 
     private static void PrintDistributions(IReadOnlyList<WslDistribution> distributions)
     {
+        var showLinuxFootprint = distributions.Any(distribution => distribution.LinuxFootprintBytes is not null);
         var table = new Table()
             .Title("Detected WSL2 distros")
             .AddColumn("#")
             .AddColumn("Distro")
             .AddColumn("State")
-            .AddColumn(new TableColumn("Disk usage").RightAligned())
-            .AddColumn(new TableColumn("VHDX size").RightAligned())
-            .AddColumn("VHDX");
+            .AddColumn(new TableColumn("Linux used").RightAligned());
+
+        if (showLinuxFootprint)
+        {
+            table
+                .AddColumn(new TableColumn("Ext4 overhead").RightAligned())
+                .AddColumn(new TableColumn("Linux footprint").RightAligned());
+        }
+
+        table
+            .AddColumn(new TableColumn("Host allocated").RightAligned())
+            .AddColumn(new TableColumn("File length").RightAligned());
 
         for (var index = 0; index < distributions.Count; index++)
         {
             var distribution = distributions[index];
-            table.AddRow(
+            var cells = new List<string>
+            {
                 (index + 1).ToString(),
                 Markup.Escape(distribution.Name),
                 Markup.Escape(distribution.State),
-                SizeFormatter.Format(distribution.DiskUsageBytes),
-                SizeFormatter.Format(distribution.VirtualSizeBytes),
-                Markup.Escape(distribution.VhdPath));
+                FormatOptionalSize(distribution.LinuxUsedBytes)
+            };
+
+            if (showLinuxFootprint)
+            {
+                cells.Add(FormatOptionalSize(distribution.Ext4OverheadBytes));
+                cells.Add(FormatOptionalSize(distribution.LinuxFootprintBytes));
+            }
+
+            cells.AddRange([
+                SizeFormatter.Format(distribution.HostAllocatedBytes),
+                SizeFormatter.Format(distribution.VhdxFileSizeBytes)
+            ]);
+            table.AddRow(cells.ToArray());
         }
 
         AnsiConsole.WriteLine();
@@ -179,22 +214,44 @@ static class Program
 
     private static void PrintSelectedDistributions(IReadOnlyList<DistributionRow> rows)
     {
+        var showLinuxFootprint = rows.Any(row => row.BeforeLinuxFootprintBytes is not null);
         var table = new Table()
             .Title("Selected distros")
             .AddColumn("Distro")
             .AddColumn("State")
-            .AddColumn(new TableColumn("Disk usage").RightAligned())
-            .AddColumn(new TableColumn("VHDX size").RightAligned())
-            .AddColumn("VHDX");
+            .AddColumn(new TableColumn("Linux used").RightAligned());
+
+        if (showLinuxFootprint)
+        {
+            table
+                .AddColumn(new TableColumn("Ext4 overhead").RightAligned())
+                .AddColumn(new TableColumn("Linux footprint").RightAligned());
+        }
+
+        table
+            .AddColumn(new TableColumn("Host allocated").RightAligned())
+            .AddColumn(new TableColumn("File length").RightAligned());
 
         foreach (var row in rows)
         {
-            table.AddRow(
+            var cells = new List<string>
+            {
                 Markup.Escape(row.Name),
                 Markup.Escape(row.State),
-                row.BeforeText,
-                row.BeforeVirtualSizeText,
-                Markup.Escape(row.VhdPath));
+                row.BeforeLinuxUsedText
+            };
+
+            if (showLinuxFootprint)
+            {
+                cells.Add(row.BeforeExt4OverheadText);
+                cells.Add(row.BeforeLinuxFootprintText);
+            }
+
+            cells.AddRange([
+                row.BeforeHostAllocatedText,
+                row.BeforeVhdxFileSizeText
+            ]);
+            table.AddRow(cells.ToArray());
         }
 
         AnsiConsole.WriteLine();
@@ -210,7 +267,7 @@ static class Program
 
         options.AddRange(distributions.Select(distribution =>
             new DistributionChoice(
-                $"{distribution.Name} ({SizeFormatter.Format(distribution.DiskUsageBytes)} on disk)",
+                $"{distribution.Name} ({SizeFormatter.Format(distribution.HostAllocatedBytes)} host allocated)",
                 [distribution])));
         options.Add(new DistributionChoice("Cancel", []));
 
@@ -225,21 +282,17 @@ static class Program
         return choice.Distributions;
     }
 
-    private static BackendMode PromptForBackend(bool optimizeAvailable)
+    private static CompactMode PromptForCompactMode()
     {
-        var options = new List<BackendChoice>
+        var options = new List<CompactModeChoice>
         {
-            new("VirtDisk API (recommended, fallback: DiskPart)", BackendMode.VirtDisk)
+            new("No zero scan", CompactMode.NoZeroScan),
+            new("Zero scan", CompactMode.ZeroScan)
         };
 
-        if (optimizeAvailable)
-        {
-            options.Add(new BackendChoice("Optimize-VHD (fallback: DiskPart)", BackendMode.OptimizeVhd));
-        }
-
         var choice = AnsiConsole.Prompt(
-            new SelectionPrompt<BackendChoice>()
-                .Title("Choose backend")
+            new SelectionPrompt<CompactModeChoice>()
+                .Title("Select compact mode")
                 .UseConverter(choice => choice.Label)
                 .AddChoices(options));
 
@@ -273,44 +326,62 @@ static class Program
         IReadOnlyList<DistributionRow> rows,
         DateTimeOffset startedAt,
         DateTimeOffset endedAt,
-        RunLogger log)
+        RunLogger log,
+        string title = "Summary")
     {
+        var showLinuxFootprint = rows.Any(row => row.BeforeLinuxFootprintBytes is not null);
         AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine(
+            $"[grey]Started:[/] {Markup.Escape(startedAt.ToString("yyyy-MM-dd HH:mm:ss zzz"))}  " +
+            $"[grey]Ended:[/] {Markup.Escape(endedAt.ToString("yyyy-MM-dd HH:mm:ss zzz"))}  " +
+            $"[grey]Elapsed:[/] {Markup.Escape(FormatDuration(endedAt - startedAt))}");
+
         var table = new Table()
-            .Title("Summary")
+            .Title(title)
             .AddColumn("Distro")
-            .AddColumn("Started")
-            .AddColumn("Ended")
             .AddColumn("Elapsed")
-            .AddColumn("Disk before")
-            .AddColumn("Disk after")
-            .AddColumn(new TableColumn("Disk bytes saved").RightAligned())
-            .AddColumn("Disk saved")
-            .AddColumn("VHDX before")
-            .AddColumn("VHDX after")
-            .AddColumn("Backend");
+            .AddColumn("Linux used");
+
+        if (showLinuxFootprint)
+        {
+            table
+                .AddColumn("Ext4 overhead")
+                .AddColumn("Linux footprint");
+        }
+
+        table
+            .AddColumn("Host allocated")
+            .AddColumn("Saved")
+            .AddColumn("File length");
 
         foreach (var row in rows)
         {
-            var savedBytes = Math.Max(0, row.BeforeDiskUsageBytes - (row.AfterDiskUsageBytes ?? row.BeforeDiskUsageBytes));
-            var message = $"Successfully compacted {row.Name}: {savedBytes:N0} bytes saved on disk ({SizeFormatter.Format(savedBytes)}). VHDX size: {row.BeforeVirtualSizeText} -> {row.AfterVirtualSizeText}.";
-            table.AddRow(
+            var savedBytes = Math.Max(0, row.BeforeHostAllocatedBytes - (row.AfterHostAllocatedBytes ?? row.BeforeHostAllocatedBytes));
+            var message = $"Successfully compacted {row.Name}: actual host saved {savedBytes:N0} bytes ({SizeFormatter.Format(savedBytes)}). VHDX file size: {row.BeforeVhdxFileSizeText} -> {row.AfterVhdxFileSizeText}.";
+            var cells = new List<string>
+            {
                 Markup.Escape(row.Name),
-                startedAt.ToString("yyyy-MM-dd HH:mm:ss zzz"),
-                endedAt.ToString("yyyy-MM-dd HH:mm:ss zzz"),
                 FormatDuration(endedAt - startedAt),
-                row.BeforeText,
-                row.AfterText,
-                savedBytes.ToString("N0"),
+                row.BeforeLinuxUsedText
+            };
+
+            if (showLinuxFootprint)
+            {
+                cells.Add(row.BeforeExt4OverheadText);
+                cells.Add(row.BeforeLinuxFootprintText);
+            }
+
+            cells.AddRange([
+                FormatBeforeAfter(row.BeforeHostAllocatedText, row.AfterHostAllocatedText),
                 SizeFormatter.Format(savedBytes),
-                row.BeforeVirtualSizeText,
-                row.AfterVirtualSizeText,
-                Markup.Escape(row.Backend));
+                FormatBeforeAfter(row.BeforeVhdxFileSizeText, row.AfterVhdxFileSizeText)
+            ]);
+            table.AddRow(cells.ToArray());
             log.Write(CompactProgressUpdate.Size(
                 "summary",
                 message,
-                beforeBytes: row.BeforeDiskUsageBytes,
-                afterBytes: row.AfterDiskUsageBytes,
+                beforeBytes: row.BeforeHostAllocatedBytes,
+                afterBytes: row.AfterHostAllocatedBytes,
                 savedBytes: savedBytes,
                 distro: row.Name,
                 backend: row.Backend));
@@ -319,6 +390,34 @@ static class Program
         AnsiConsole.Write(table);
         AnsiConsole.MarkupLine($"Log saved to: [grey]{Markup.Escape(log.LogFile)}[/]");
     }
+
+    private static async Task RunCompactionAsync(
+        CompactOrchestrator orchestrator,
+        IReadOnlyList<DistributionRow> rows,
+        CompactMode compactMode,
+        ExitGuard exitGuard,
+        RunLogger log)
+    {
+        var display = new TerminalRunDisplay(log);
+        exitGuard.SetProtected(true);
+        try
+        {
+            using var consoleModeGuard = new ConsoleModeGuard(log, "compaction");
+            await display.RunAsync(
+                (progress, token) => orchestrator.RunAsync(rows, compactMode, progress, token),
+                exitGuard.Token).ConfigureAwait(false);
+        }
+        finally
+        {
+            exitGuard.SetProtected(false);
+        }
+    }
+
+    private static string FormatBeforeAfter(string before, string after)
+        => $"{before} -> {after}";
+
+    private static string FormatCompactMode(CompactMode compactMode)
+        => compactMode == CompactMode.ZeroScan ? "Zero scan" : "No zero scan";
 
     private static bool IsRunningAsAdministrator()
     {
@@ -331,11 +430,17 @@ static class Program
         => Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
 
     private static string FormatDistributionForLog(WslDistribution distribution)
-        => $"{distribution.Name}; state={distribution.State}; diskUsage={distribution.DiskUsageBytes}; virtualSize={distribution.VirtualSizeBytes}; vhd={distribution.VhdPath}";
+        => $"{distribution.Name}; state={distribution.State}; linuxUsed={FormatNullableBytesForLog(distribution.LinuxUsedBytes)}; ext4Overhead={FormatNullableBytesForLog(distribution.Ext4OverheadBytes)}; linuxFootprint={FormatNullableBytesForLog(distribution.LinuxFootprintBytes)}; linuxUsageSource={distribution.LinuxUsageSource ?? "-"}; hostAllocated={distribution.HostAllocatedBytes}; vhdxFileSize={distribution.VhdxFileSizeBytes}; vhd={distribution.VhdPath}";
+
+    private static string FormatOptionalSize(long? bytes)
+        => bytes is null ? "-" : SizeFormatter.Format(bytes.Value);
+
+    private static string FormatNullableBytesForLog(long? bytes)
+        => bytes is null ? "-" : bytes.Value.ToString();
 
     private sealed record DistributionChoice(string Label, IReadOnlyList<WslDistribution> Distributions);
 
-    private sealed record BackendChoice(string Label, BackendMode Mode);
+    private sealed record CompactModeChoice(string Label, CompactMode Mode);
 
     private static string FormatDuration(TimeSpan duration)
     {

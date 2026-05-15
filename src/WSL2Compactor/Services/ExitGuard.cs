@@ -9,20 +9,19 @@ internal sealed class ExitGuard : IDisposable
     private const uint CtrlCloseEvent = 2;
     private const uint CtrlLogoffEvent = 5;
     private const uint CtrlShutdownEvent = 6;
-    private const uint MbYesNo = 0x00000004;
-    private const uint MbIconWarning = 0x00000030;
-    private const uint MbDefaultButton2 = 0x00000100;
-    private const uint MbSystemModal = 0x00001000;
-    private const int IdYes = 6;
     private readonly CancellationTokenSource _cancellation = new();
     private readonly ConsoleCtrlHandler _consoleCtrlHandler;
     private readonly RunLogger _log;
-    private int _confirmationActive;
+    private readonly ProcessRunner _processRunner;
+    private readonly VirtDiskOperationRegistry _virtDiskOperations;
+    private int _interruptActive;
     private volatile bool _protected;
 
-    public ExitGuard(RunLogger log)
+    public ExitGuard(RunLogger log, ProcessRunner processRunner, VirtDiskOperationRegistry virtDiskOperations)
     {
         _log = log;
+        _processRunner = processRunner;
+        _virtDiskOperations = virtDiskOperations;
         _consoleCtrlHandler = HandleConsoleControl;
         Console.CancelKeyPress += HandleCancelKeyPress;
 
@@ -60,17 +59,16 @@ internal sealed class ExitGuard : IDisposable
 
     private void HandleCancelKeyPress(object? sender, ConsoleCancelEventArgs args)
     {
-        if (!_protected)
-        {
-            return;
-        }
-
         args.Cancel = true;
-        _ = ConfirmStop("Ctrl+C");
     }
 
     private bool HandleConsoleControl(uint controlType)
     {
+        if (controlType is CtrlCEvent or CtrlBreakEvent)
+        {
+            return true;
+        }
+
         if (!_protected)
         {
             return false;
@@ -78,53 +76,26 @@ internal sealed class ExitGuard : IDisposable
 
         return controlType switch
         {
-            CtrlCEvent or CtrlBreakEvent => HandleProtectedSignal(GetSignalName(controlType), allowDefaultTerminationOnYes: false),
-            CtrlCloseEvent or CtrlLogoffEvent or CtrlShutdownEvent => HandleProtectedSignal(GetSignalName(controlType), allowDefaultTerminationOnYes: true),
+            CtrlCloseEvent or CtrlLogoffEvent or CtrlShutdownEvent => HandleCloseSignal(GetSignalName(controlType)),
             _ => false
         };
     }
 
-    private bool HandleProtectedSignal(string signalName, bool allowDefaultTerminationOnYes)
+    private bool HandleCloseSignal(string source)
     {
-        var stop = ConfirmStop(signalName);
-        return stop ? !allowDefaultTerminationOnYes : true;
-    }
-
-    private bool ConfirmStop(string source)
-    {
-        if (Interlocked.Exchange(ref _confirmationActive, 1) == 1)
+        if (Interlocked.Exchange(ref _interruptActive, 1) == 1)
         {
-            _log.Warning("exit guard", $"Ignored repeated interrupt while confirmation is already open. Source: {source}");
-            return false;
+            _log.Warning("exit guard", $"Ignored repeated close signal while close handling is already in progress. Source: {source}");
+            return true;
         }
 
-        try
-        {
-            _log.Warning("exit guard", $"Interrupt requested. Source: {source}");
-            var stop = false;
+        var message = $"{source} received. Requesting VirtDisk cancellation when possible.";
+        _log.Warning("exit guard", message);
 
-            if (OperatingSystem.IsWindows())
-            {
-                var result = MessageBoxW(
-                    IntPtr.Zero,
-                    "Stop compaction and close?",
-                    "WSL2Compactor",
-                    MbYesNo | MbIconWarning | MbDefaultButton2 | MbSystemModal);
-                stop = result == IdYes;
-            }
-
-            _log.Prompt("exit guard", stop ? $"Interrupt confirmed. Source: {source}" : $"Interrupt declined. Source: {source}");
-            if (stop)
-            {
-                _cancellation.Cancel();
-            }
-
-            return stop;
-        }
-        finally
-        {
-            Interlocked.Exchange(ref _confirmationActive, 0);
-        }
+        var cancelRequested = _virtDiskOperations.RequestCancel(TimeSpan.FromSeconds(4), message => _log.Warning("VirtDisk cancel", message));
+        var stopped = _processRunner.KillActiveProcesses(source, message => _log.Warning("process", message));
+        _log.Warning("exit guard", $"Close handling completed. VirtDisk cancel requested: {cancelRequested}. Active child processes stopped: {stopped}.");
+        return true;
     }
 
     private static string GetSignalName(uint controlType)
@@ -140,7 +111,4 @@ internal sealed class ExitGuard : IDisposable
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool SetConsoleCtrlHandler(ConsoleCtrlHandler handler, bool add);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
 }

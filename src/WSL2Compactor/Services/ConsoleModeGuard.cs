@@ -13,7 +13,7 @@ internal sealed class ConsoleModeGuard : IDisposable
     private readonly uint _originalInputMode;
     private readonly bool _restoreInputMode;
 
-    public ConsoleModeGuard(RunLogger log)
+    public ConsoleModeGuard(RunLogger log, string scope)
     {
         _log = log;
 
@@ -43,7 +43,7 @@ internal sealed class ConsoleModeGuard : IDisposable
 
         if (SetConsoleMode(_inputHandle, newMode))
         {
-            _log.Info("console", "Console QuickEdit mode disabled to prevent selection pause during live updates.");
+            _log.Info("console", $"Console QuickEdit mode disabled during {scope} to prevent console selection pause.");
         }
         else
         {

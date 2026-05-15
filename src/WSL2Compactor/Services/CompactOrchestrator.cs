@@ -1,35 +1,30 @@
+using System.Globalization;
 using WSL2Compactor.Models;
 
 namespace WSL2Compactor.Services;
 
-internal enum BackendMode
+internal enum CompactMode
 {
-    VirtDisk,
-    OptimizeVhd
+    NoZeroScan,
+    ZeroScan
 }
 
 internal sealed class CompactOrchestrator
 {
     private readonly ProcessRunner _processRunner;
     private readonly VirtDiskCompactBackend _virtDiskBackend;
-    private readonly DiskPartCompactBackend _diskPartBackend;
-    private readonly OptimizeVhdCompactBackend _optimizeVhdBackend;
 
     public CompactOrchestrator(
         ProcessRunner processRunner,
-        VirtDiskCompactBackend virtDiskBackend,
-        DiskPartCompactBackend diskPartBackend,
-        OptimizeVhdCompactBackend optimizeVhdBackend)
+        VirtDiskCompactBackend virtDiskBackend)
     {
         _processRunner = processRunner;
         _virtDiskBackend = virtDiskBackend;
-        _diskPartBackend = diskPartBackend;
-        _optimizeVhdBackend = optimizeVhdBackend;
     }
 
     public async Task RunAsync(
         IReadOnlyList<DistributionRow> rows,
-        BackendMode backendMode,
+        CompactMode compactMode,
         IProgress<CompactProgressUpdate> progress,
         CancellationToken cancellationToken)
     {
@@ -39,6 +34,16 @@ internal sealed class CompactOrchestrator
         foreach (var row in rows)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (row.BeforeLinuxUsedBytes is null)
+            {
+                row.Status = "Reading Linux usage";
+                progress.Report(CompactProgressUpdate.Indeterminate("df", "reading Linux filesystem usage", row.Name));
+                var linuxUsage = await ReadLinuxUsedBytesAsync(row, progress, cancellationToken).ConfigureAwait(true);
+                row.BeforeLinuxUsedBytes = linuxUsage?.UsedBytes;
+                row.BeforeExt4OverheadBytes = linuxUsage?.Ext4OverheadBytes;
+                row.LinuxUsageSource = linuxUsage?.Source;
+            }
+
             row.Status = "Running fstrim";
             progress.Report(CompactProgressUpdate.Indeterminate("fstrim", "running", row.Name));
 
@@ -52,7 +57,12 @@ internal sealed class CompactOrchestrator
 
             if (!trimResult.Succeeded)
             {
-                progress.Report(CompactProgressUpdate.Warning("fstrim", $"fstrim failed for {row.Name}. Compact will continue.", row.Name));
+                throw CreateProcessFailure(
+                    "fstrim",
+                    $"fstrim failed for {row.Name}.",
+                    trimResult,
+                    row.Name,
+                    row.VhdPath);
             }
         }
 
@@ -68,7 +78,12 @@ internal sealed class CompactOrchestrator
 
         if (!shutdownResult.Succeeded)
         {
-            progress.Report(CompactProgressUpdate.Warning("shutdown", "wsl --shutdown exited with a non-zero code. Checking whether VHDX locks were released."));
+            throw CreateProcessFailure(
+                "shutdown",
+                "wsl --shutdown failed.",
+                shutdownResult,
+                distro: null,
+                vhdPath: null);
         }
 
         foreach (var row in rows)
@@ -76,75 +91,32 @@ internal sealed class CompactOrchestrator
             cancellationToken.ThrowIfCancellationRequested();
             await WaitForVhdUnlockAsync(row, progress, cancellationToken).ConfigureAwait(true);
             var beforeSize = VhdxSizeProbe.Read(row.VhdPath);
-            row.BeforeDiskUsageBytes = beforeSize.DiskUsageBytes;
-            row.BeforeVirtualSizeBytes = beforeSize.FileSizeBytes;
+            row.BeforeHostAllocatedBytes = beforeSize.HostAllocatedBytes;
+            row.BeforeVhdxFileSizeBytes = beforeSize.FileSizeBytes;
+            row.AfterHostAllocatedBytes = null;
+            row.AfterVhdxFileSizeBytes = null;
             row.Status = "Running compact";
-            row.Backend = backendMode == BackendMode.OptimizeVhd ? _optimizeVhdBackend.Name : _virtDiskBackend.Name;
+            row.Backend = GetBackendName(compactMode);
 
             progress.Report(CompactProgressUpdate.Size(
                 "compact",
-                $"Disk usage before: {row.BeforeText}; VHDX size: {row.BeforeVirtualSizeText}",
-                beforeBytes: row.BeforeDiskUsageBytes,
+                $"Host allocated before: {row.BeforeHostAllocatedText}; VHDX file size: {row.BeforeVhdxFileSizeText}",
+                beforeBytes: row.BeforeHostAllocatedBytes,
                 distro: row.Name,
                 backend: row.Backend));
 
-            try
-            {
-                if (backendMode == BackendMode.OptimizeVhd)
-                {
-                    await _optimizeVhdBackend.CompactAsync(row.VhdPath, new DistroProgress(progress, row.Name, _optimizeVhdBackend.Name), cancellationToken).ConfigureAwait(true);
-                }
-                else
-                {
-                    if (TestHooks.IsEnabled(TestHooks.FailVirtDisk))
-                    {
-                        throw new CompactFailureException(
-                            CompactFailureKind.Backend,
-                            "VirtDisk",
-                            "Injected VirtDisk failure.",
-                            row.Name,
-                            _virtDiskBackend.Name,
-                            row.VhdPath,
-                            fallbackAllowed: true);
-                    }
-
-                    await _virtDiskBackend.CompactAsync(row.VhdPath, new DistroProgress(progress, row.Name, _virtDiskBackend.Name), cancellationToken).ConfigureAwait(true);
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                var failure = ToCompactFailure(ex, row, phase: "compact", fallbackAllowed: true);
-                if (!failure.FallbackAllowed)
-                {
-                    row.Status = "Failed";
-                    progress.Report(CompactProgressUpdate.Warning("compact", $"{row.Backend} failed without fallback: {failure.Message}", row.Name, row.Backend));
-                    throw failure;
-                }
-
-                progress.Report(CompactProgressUpdate.Warning("fallback", $"{row.Backend} failed: {failure.Message}", row.Name, row.Backend));
-                progress.Report(CompactProgressUpdate.Indeterminate("fallback", "Running DiskPart fallback.", row.Name, _diskPartBackend.Name));
-                row.Backend = _diskPartBackend.Name;
-                try
-                {
-                    await _diskPartBackend.CompactAsync(row.VhdPath, new DistroProgress(progress, row.Name, _diskPartBackend.Name), cancellationToken).ConfigureAwait(true);
-                }
-                catch (Exception fallbackEx) when (fallbackEx is not OperationCanceledException)
-                {
-                    row.Status = "Failed";
-                    throw ToCompactFailure(fallbackEx, row, phase: "DiskPart", fallbackAllowed: false);
-                }
-            }
+            await RunBackendAsync(row, compactMode, progress, cancellationToken).ConfigureAwait(true);
 
             var afterSize = VhdxSizeProbe.Read(row.VhdPath);
-            row.AfterDiskUsageBytes = afterSize.DiskUsageBytes;
-            row.AfterVirtualSizeBytes = afterSize.FileSizeBytes;
+            row.AfterHostAllocatedBytes = afterSize.HostAllocatedBytes;
+            row.AfterVhdxFileSizeBytes = afterSize.FileSizeBytes;
             row.Status = "Done";
-            var savedBytes = Math.Max(0, row.BeforeDiskUsageBytes - row.AfterDiskUsageBytes.Value);
+            var savedBytes = Math.Max(0, row.BeforeHostAllocatedBytes - row.AfterHostAllocatedBytes.Value);
             progress.Report(CompactProgressUpdate.Size(
                 "complete",
-                $"Disk usage after: {row.AfterText}; saved: {row.SavedText}; VHDX size: {row.AfterVirtualSizeText}",
-                beforeBytes: row.BeforeDiskUsageBytes,
-                afterBytes: row.AfterDiskUsageBytes.Value,
+                $"Host allocated after: {row.AfterHostAllocatedText}; actual host saved: {row.SavedText}; VHDX file size: {row.AfterVhdxFileSizeText}",
+                beforeBytes: row.BeforeHostAllocatedBytes,
+                afterBytes: row.AfterHostAllocatedBytes.Value,
                 savedBytes: savedBytes,
                 distro: row.Name,
                 backend: row.Backend));
@@ -152,18 +124,99 @@ internal sealed class CompactOrchestrator
         }
     }
 
-    private static async Task WaitForVhdUnlockAsync(DistributionRow row, IProgress<CompactProgressUpdate> progress, CancellationToken cancellationToken)
+    internal static string GetBackendName(CompactMode compactMode)
+        => compactMode == CompactMode.ZeroScan ? "VirtDisk API zero scan" : "VirtDisk API no zero scan";
+
+    private async Task RunBackendAsync(
+        DistributionRow row,
+        CompactMode compactMode,
+        IProgress<CompactProgressUpdate> progress,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        row.Backend = GetBackendName(compactMode);
+
+        try
+        {
+            if (TestHooks.IsEnabled(TestHooks.FailVirtDisk))
+            {
+                throw new CompactFailureException(
+                    CompactFailureKind.Backend,
+                    "VirtDisk",
+                    "Injected VirtDisk failure.",
+                    row.Name,
+                    row.Backend,
+                    row.VhdPath);
+            }
+
+            await _virtDiskBackend.CompactAsync(
+                row.VhdPath,
+                quickMode: compactMode == CompactMode.NoZeroScan,
+                new DistroProgress(progress, row.Name, _virtDiskBackend.Name),
+                cancellationToken).ConfigureAwait(true);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var failure = ToCompactFailure(ex, row, phase: "compact");
+            row.Status = "Failed";
+            progress.Report(CompactProgressUpdate.Warning("compact", $"{row.Backend} failed: {failure.Message}", row.Name, row.Backend));
+            throw failure;
+        }
+    }
+
+    private async Task<LinuxUsageSnapshot?> ReadLinuxUsedBytesAsync(
+        DistributionRow row,
+        IProgress<CompactProgressUpdate> progress,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _processRunner.RunAsync(
+                "wsl.exe",
+                ["-d", row.Name, "--user", "root", "df", "-B1", "--output=used", "/"],
+                new ProcessProgressAdapter(progress, "df", row.Name),
+                cancellationToken).ConfigureAwait(true);
+
+            if (!result.Succeeded)
+            {
+                if (IsSharingViolation(result))
+                {
+                    throw CreateLockedFailure(row, innerException: null);
+                }
+
+                progress.Report(CompactProgressUpdate.Warning("df", "Linux usage unavailable. Compact will continue.", row.Name));
+                return null;
+            }
+
+            var output = ProcessRunner.NormalizeProcessText(result.StandardOutput);
+            foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Reverse())
+            {
+                if (long.TryParse(line.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var usedBytes))
+                {
+                    progress.Report(CompactProgressUpdate.Size(
+                        "df",
+                        $"Linux used before: {SizeFormatter.Format(usedBytes)}",
+                        distro: row.Name));
+                    return new LinuxUsageSnapshot(usedBytes, null, "df");
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not CompactFailureException)
+        {
+            progress.Report(CompactProgressUpdate.Warning("df", $"Linux usage unavailable: {ex.Message}. Compact will continue.", row.Name));
+        }
+
+        return null;
+    }
+
+    private static Task WaitForVhdUnlockAsync(DistributionRow row, IProgress<CompactProgressUpdate> progress, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (TestHooks.IsEnabled(TestHooks.LockedVhd))
         {
             progress.Report(CompactProgressUpdate.Warning("lock check", "Injected locked VHDX failure.", row.Name));
-            throw new CompactFailureException(
-                CompactFailureKind.Locked,
-                "lock check",
-                "Injected locked VHDX failure. Another process may still be holding the VHDX.",
-                row.Name,
-                vhdPath: row.VhdPath,
-                fallbackAllowed: false);
+            throw CreateLockedFailure(row, innerException: null);
         }
 
         if (!File.Exists(row.VhdPath))
@@ -173,59 +226,28 @@ internal sealed class CompactOrchestrator
                 "lock check",
                 $"VHDX file was not found: {row.VhdPath}",
                 row.Name,
-                vhdPath: row.VhdPath,
-                fallbackAllowed: false);
+                vhdPath: row.VhdPath);
         }
 
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(20);
-        var attempt = 0;
-        Exception? lastException = null;
-
-        while (true)
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            attempt++;
-
-            try
-            {
-                using var stream = new FileStream(row.VhdPath, FileMode.Open, FileAccess.Read, FileShare.None);
-                progress.Report(CompactProgressUpdate.Indeterminate("lock check", $"OK ({attempt})", row.Name));
-                return;
-            }
-            catch (IOException ex) when (DateTimeOffset.UtcNow < deadline)
-            {
-                lastException = ex;
-                progress.Report(CompactProgressUpdate.Indeterminate("lock check", $"waiting ({attempt}) {ex.Message}", row.Name));
-                await Task.Delay(1000, cancellationToken).ConfigureAwait(true);
-            }
-            catch (UnauthorizedAccessException ex) when (DateTimeOffset.UtcNow < deadline)
-            {
-                lastException = ex;
-                progress.Report(CompactProgressUpdate.Indeterminate("lock check", $"waiting ({attempt}) {ex.Message}", row.Name));
-                await Task.Delay(1000, cancellationToken).ConfigureAwait(true);
-            }
-            catch (IOException ex)
-            {
-                lastException = ex;
-                throw CreateLockedFailure(row, lastException);
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                lastException = ex;
-                throw new CompactFailureException(
-                    CompactFailureKind.AccessDenied,
-                    "lock check",
-                    $"VHDX could not be opened after WSL shutdown: {ex.Message}",
-                    row.Name,
-                    vhdPath: row.VhdPath,
-                    fallbackAllowed: false,
-                    innerException: ex);
-            }
-
-            if (DateTimeOffset.UtcNow >= deadline)
-            {
-                throw CreateLockedFailure(row, lastException);
-            }
+            using var stream = new FileStream(row.VhdPath, FileMode.Open, FileAccess.Read, FileShare.None);
+            progress.Report(CompactProgressUpdate.Indeterminate("lock check", "OK", row.Name));
+            return Task.CompletedTask;
+        }
+        catch (IOException ex)
+        {
+            throw CreateLockedFailure(row, ex);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw new CompactFailureException(
+                CompactFailureKind.AccessDenied,
+                "lock check",
+                $"VHDX could not be opened after WSL shutdown: {ex.Message}",
+                row.Name,
+                vhdPath: row.VhdPath,
+                innerException: ex);
         }
     }
 
@@ -233,13 +255,71 @@ internal sealed class CompactOrchestrator
         => new(
             CompactFailureKind.Locked,
             "lock check",
-            "VHDX could not be opened after WSL shutdown. Another process may still be holding the VHDX.",
+            "VHDX is in use by Windows/WSL or another process. Run wsl --shutdown and try again. If PID 4/System still holds the file, reboot may be required.",
             row.Name,
             vhdPath: row.VhdPath,
-            fallbackAllowed: false,
             innerException: innerException);
 
-    private static CompactFailureException ToCompactFailure(Exception exception, DistributionRow row, string phase, bool fallbackAllowed)
+    private static CompactFailureException CreateProcessFailure(
+        string phase,
+        string message,
+        ProcessResult result,
+        string? distro,
+        string? vhdPath)
+    {
+        if (IsSharingViolation(result))
+        {
+            return new CompactFailureException(
+                CompactFailureKind.Locked,
+                phase,
+                "VHDX is in use by Windows/WSL or another process. Run wsl --shutdown and try again. If PID 4/System still holds the file, reboot may be required.",
+                distro,
+                vhdPath: vhdPath,
+                exitCode: result.ExitCode);
+        }
+
+        var details = ExtractProcessDetails(result);
+        return new CompactFailureException(
+            CompactFailureKind.CommandFailed,
+            phase,
+            string.IsNullOrWhiteSpace(details)
+                ? $"{message} Exit code: {result.ExitCode}."
+                : $"{message} Exit code: {result.ExitCode}. {details}",
+            distro,
+            vhdPath: vhdPath,
+            exitCode: result.ExitCode);
+    }
+
+    private static bool IsSharingViolation(ProcessResult result)
+        => ContainsSharingViolation(result.StandardOutput) || ContainsSharingViolation(result.StandardError);
+
+    private static bool ContainsSharingViolation(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        return text.Contains("ERROR_SHARING_VIOLATION", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("Wsl/Service/CreateInstance/MountDisk/HCS", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("Failed to attach disk", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("being used by another process", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("別のプロセスが使用中です", StringComparison.Ordinal) ||
+            text.Contains("プロセスはファイルにアクセスできません", StringComparison.Ordinal);
+    }
+
+    private static string ExtractProcessDetails(ProcessResult result)
+    {
+        var output = ProcessRunner.NormalizeProcessText(result.StandardOutput);
+        var error = ProcessRunner.NormalizeProcessText(result.StandardError);
+        return string.Join(
+            " ",
+            new[] { output, error }
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Select(value => value.Length > 500 ? value[..500] + "..." : value));
+    }
+
+    private static CompactFailureException ToCompactFailure(Exception exception, DistributionRow row, string phase)
     {
         if (exception is CompactFailureException failure)
         {
@@ -252,7 +332,6 @@ internal sealed class CompactOrchestrator
                 failure.VhdPath ?? row.VhdPath,
                 failure.ExitCode,
                 failure.Win32ErrorCode,
-                failure.FallbackAllowed,
                 failure);
         }
 
@@ -263,7 +342,6 @@ internal sealed class CompactOrchestrator
                 row.Name,
                 row.Backend,
                 row.VhdPath,
-                fallbackAllowed: fallbackAllowed,
                 innerException: exception);
     }
 

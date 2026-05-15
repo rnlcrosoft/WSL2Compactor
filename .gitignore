@@ -5,5 +5,6 @@ obj/
 *.user
 *.suo
 *.log
-artifacts/
+*.lscache
+.build/
 TestResults/

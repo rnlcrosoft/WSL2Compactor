@@ -4,6 +4,7 @@ internal static class TestHooks
 {
     public const string FailFstrim = "WSL2COMPACTOR_TEST_FAIL_FSTRIM";
     public const string FailVirtDisk = "WSL2COMPACTOR_TEST_FAIL_VIRTDISK";
+    public const string FailExt4Probe = "WSL2COMPACTOR_TEST_FAIL_EXT4_PROBE";
     public const string LockedVhd = "WSL2COMPACTOR_TEST_LOCKED_VHD";
 
     public static bool IsEnabled(string name)
@@ -11,7 +12,7 @@ internal static class TestHooks
 
     public static void ReportActiveHooks(IProgress<CompactProgressUpdate> progress)
     {
-        foreach (var name in new[] { FailFstrim, FailVirtDisk, LockedVhd })
+        foreach (var name in new[] { FailFstrim, FailVirtDisk, FailExt4Probe, LockedVhd })
         {
             if (IsEnabled(name))
             {
