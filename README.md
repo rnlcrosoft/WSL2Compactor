@@ -4,26 +4,11 @@ WSL2Compactor is an interactive Windows console application for compacting WSL2 
 
 It guides the WSL and Windows compaction steps in order.
 
-```text
-Deleted files inside WSL do not automatically shrink ext4.vhdx.
-
-+----------------------------------+-------------------------+----------------+
-| State                            | Windows C: free / total | Host allocated |
-+----------------------------------+-------------------------+----------------+
-| Initial state                    | 500 GiB / 1000 GiB      | 500 GiB        |
-| [WSL] Create 100 GiB test data   | 400 GiB / 1000 GiB      | 600 GiB        |
-| [WSL] Delete that test data      | 400 GiB / 1000 GiB      | 600 GiB        |
-| [WSL2Compactor] Compact VHDX     | 500 GiB / 1000 GiB      | 500 GiB        |
-+----------------------------------+-------------------------+----------------+
-
-Result: 100 GiB of deleted WSL data returned to Windows.
-```
+<img src="hero.png" alt="WSL2Compactor compacting WSL2 ext4.vhdx files" width="100%" />
 
 ## Download
 
 Download `WSL2Compactor-win-x64.exe` from the [latest GitHub Release](https://github.com/rnlcrosoft/WSL2Compactor/releases/latest) and run it as Administrator.
-
-Logs are written to `%LocalAppData%\WSL2Compactor\Logs`.
 
 ## How It Works
 
@@ -71,12 +56,6 @@ make publish
 ```
 
 The published executable is written to `.build/publish/WSL2Compactor.exe`.
-
-To publish, copy to the Windows Desktop, and launch the app as Administrator:
-
-```sh
-make run
-```
 
 For release checks, run:
 
